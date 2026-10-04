@@ -1,41 +1,65 @@
 import type { StormAlert, MatchedUser } from '../engine/types';
 
 /**
- * Escapes reserved MarkdownV2 characters in Telegram:
- * _ * [ ] ( ) ~ > # + - = | { } . !
+ * Escapes reserved characters for Telegram HTML mode:
+ * & -> &amp;
+ * < -> &lt;
+ * > -> &gt;
+ * All other punctuation (., -, !, ~, (, ), {, }, etc.) does NOT need escaping in HTML!
  */
-export function escapeMarkdownV2(text: string): string {
-  return text.replace(/[\\[\]()~>#+=|{}.!_*-]/g, '\\$&');
+export function escapeHtml(text: string | number): string {
+  return String(text)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 /**
- * Formats a severe hail storm alert into a structured Telegram MarkdownV2 message.
+ * Escapes reserved MarkdownV2 characters in Telegram:
+ * \ _ * [ ] ( ) ~ ` > # + - = | { } . !
  */
-export function formatHailAlert(alert: StormAlert, user: MatchedUser): string {
+export function escapeMarkdownV2(text: string | number): string {
+  return String(text).replace(/[\\[\]()~>#+=|{}.!_*`\\-]/g, '\\$&');
+}
+
+/**
+ * Formats a severe hail storm alert into a safe, bulletproof Telegram HTML message.
+ * HTML mode completely avoids MarkdownV2 escaping pitfalls with dots, hyphens, and tildes.
+ */
+export function formatHailAlertHtml(alert: StormAlert, user: MatchedUser, reason?: string): string {
   const now = new Date();
   const etaDate = new Date(now.getTime() + alert.etaMinutes * 60 * 1000);
   const etaClock = etaDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  const escapedLocation = escapeMarkdownV2(user.locationName);
-  const escapedH3 = escapeMarkdownV2(user.h3Res7);
-  const escapedEtaMinutes = escapeMarkdownV2(String(alert.etaMinutes));
-  const escapedEtaClock = escapeMarkdownV2(etaClock);
-  const escapedHailCm = escapeMarkdownV2(String(alert.hailSizeCm));
-  const escapedHailDesc = escapeMarkdownV2(alert.hailDescription);
-  const escapedSpeed = escapeMarkdownV2(String(alert.speedKmh));
-  const escapedDirection = escapeMarkdownV2(alert.direction);
-  const escapedDbz = escapeMarkdownV2(String(alert.maxDbz));
-  const escapedInstruction = escapeMarkdownV2(alert.instruction);
+  const escapedLocation = escapeHtml(user.locationName);
+  const escapedH3 = escapeHtml(user.h3Res7);
+  const escapedHailCm = escapeHtml(alert.hailSizeCm);
+  const escapedHailDesc = escapeHtml(alert.hailDescription);
+  const escapedSpeed = escapeHtml(alert.speedKmh);
+  const escapedDirection = escapeHtml(alert.direction);
+  const escapedDbz = escapeHtml(alert.maxDbz);
+  const escapedInstruction = escapeHtml(alert.instruction);
+
+  const escalationBadge =
+    reason === 'ESCALATION'
+      ? `🔺 <b>ESCALATION: HAIL SEVERITY INCREASED TO ${escapedHailCm} CM!</b> 🔺\n\n`
+      : '';
 
   return (
-    `⚠️ *SEVERE WEATHER ALERT: HAIL DETECTED*\n\n` +
-    `A severe convective storm cell is tracking toward your monitored location \\(*${escapedLocation}*\\)\\.\n\n` +
-    `• *Est\\. Arrival Time \\(ETA\\):* \\~${escapedEtaMinutes} min \\(${escapedEtaClock}\\)\n` +
-    `• *Predicted Hail Diameter:* ${escapedHailCm} cm \\(${escapedHailDesc}\\)\n` +
-    `• *Storm Velocity:* ${escapedSpeed} km/h moving ${escapedDirection}\n` +
-    `• *Radar Core Intensity:* ${escapedDbz} dBZ\n` +
-    `• *Spatial Index \\(H3 Res 7\\):* \`${escapedH3}\`\n\n` +
-    `🚗 *Recommended Action:*\n` +
+    escalationBadge +
+    `⚠️ <b>SEVERE WEATHER ALERT: HAIL DETECTED</b>\n\n` +
+    `A severe convective storm cell is tracking toward your monitored location (<b>${escapedLocation}</b>).\n\n` +
+    `• <b>Est. Arrival Time (ETA):</b> ~${alert.etaMinutes} min (${etaClock})\n` +
+    `• <b>Predicted Hail Diameter:</b> ${escapedHailCm} cm (${escapedHailDesc})\n` +
+    `• <b>Storm Velocity:</b> ${escapedSpeed} km/h moving ${escapedDirection}\n` +
+    `• <b>Radar Core Intensity:</b> ${escapedDbz} dBZ\n` +
+    `• <b>Spatial Index (H3 Res 7):</b> <code>${escapedH3}</code>\n\n` +
+    `🚗 <b>Recommended Action:</b>\n` +
     `${escapedInstruction}`
   );
 }
+
+/**
+ * Backward-compatible alias defaulting to bulletproof HTML formatting.
+ */
+export const formatHailAlert = formatHailAlertHtml;

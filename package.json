@@ -7,19 +7,28 @@
     "dev": "bun run src/index.ts",
     "check:db": "bun run src/db/check.ts",
     "migrate": "bun run src/db/migrate.ts",
-    "simulate": "bun run src/simulator/cli.ts"
+    "simulate": "bun run src/simulator/cli.ts",
+    "test:dedup": "bun run src/simulator/test-deduplication.ts"
   },
   "devDependencies": {
     "@types/bun": "latest",
+    "@types/ioredis": "^5.0.0",
     "drizzle-kit": "^0.31.11"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
   "dependencies": {
+    "@bull-board/api": "^9.10.2",
+    "@bull-board/hono": "^9.10.2",
+    "@grammyjs/parse-mode": "^2.3.0",
+    "@hono/bun": "^1.0.0",
+    "bullmq": "^6.3.11",
     "drizzle-orm": "^0.45.3",
     "grammy": "^1.46.0",
     "h3-js": "^4.5.0",
+    "hono": "^4.13.13",
+    "ioredis": "^6.0.0",
     "postgres": "^3.4.9",
     "zod": "^4.6.5"
   }

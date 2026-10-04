@@ -1,9 +1,16 @@
 import { sql } from 'drizzle-orm';
 import { db } from './db';
+import { redis } from './redis/client';
 import { createBot, startBot } from './bot';
+import { startDispatchWorker } from './queue/worker';
+import { startBullBoard } from './queue/dashboard';
+import { env } from './config/env';
 
 async function main() {
-  console.log('🚀 Weather Alert App (MVP 1) Initializing...');
+  console.log('🚀 Weather Alert App (MVP 2) Initializing...');
+
+  // Start Bull Board UI Dashboard
+  startBullBoard(env.PORT || 3000);
 
   // 1. Verify PostGIS connection
   try {
@@ -15,14 +22,26 @@ async function main() {
     process.exit(1);
   }
 
-  // 2. Initialize Telegram Bot
+  // 2. Verify Redis connection
+  try {
+    const pong = await redis.ping();
+    console.log(`✅ Redis Deduplication Gate Active (${pong})`);
+  } catch (err) {
+    console.error('❌ Redis connection failed. Is Redis running? (docker compose up -d)', err);
+    process.exit(1);
+  }
+
+  // 3. Initialize Telegram Bot & Asynchronous Worker
   const bot = createBot();
   if (bot) {
+    // Start BullMQ dispatch worker listening for queued alerts
+    startDispatchWorker(bot);
     await startBot(bot);
   } else {
     console.log(
-      '\n💡 Headless Mode Active: You can still run automated spatial simulations using:\n' +
-        '   bun run simulate\n'
+      '\n💡 Headless Mode Active: You can still run automated spatial & deduplication simulations using:\n' +
+        '   bun run simulate\n' +
+        '   bun run test:dedup\n'
     );
   }
 }

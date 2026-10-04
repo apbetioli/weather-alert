@@ -12,6 +12,34 @@ export function createBot(): Bot | null {
   }
 
   const bot = new Bot(env.TELEGRAM_BOT_TOKEN);
+
+  // Universal Fallback Transformer: Guarantees that no notification is ever dropped due to formatting syntax errors
+  bot.api.config.use(async (prev, method, payload, signal) => {
+    try {
+      return await prev(method, payload, signal);
+    } catch (err: any) {
+      if (
+        method === 'sendMessage' &&
+        err?.error_code === 400 &&
+        typeof err?.description === 'string' &&
+        err.description.includes("can't parse entities")
+      ) {
+        console.warn(
+          `⚠️ [Telegram API Transformer] Parse error intercepted: "${err.description}". Retrying as plain text to guarantee delivery.`
+        );
+        const fallbackPayload = { ...(payload as any) };
+        delete fallbackPayload.parse_mode;
+        delete fallbackPayload.entities;
+        if (typeof fallbackPayload.text === 'string') {
+          // Strip formatting tags so plain text is clean
+          fallbackPayload.text = fallbackPayload.text.replace(/<[^>]*>/g, '');
+        }
+        return await prev(method, fallbackPayload, signal);
+      }
+      throw err;
+    }
+  });
+
   registerBotHandlers(bot);
 
   // Catch bot errors gracefully
