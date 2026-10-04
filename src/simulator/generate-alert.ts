@@ -32,13 +32,27 @@ export function generateStormPolygon(centerLat: number, centerLon: number, radiu
 /**
  * Generates a realistic severe hail storm event centered at or approaching a given location.
  */
-export function createSyntheticHailAlert(centerLat: number, centerLon: number): StormAlert {
+export function createSyntheticHailAlert(
+  centerLat: number,
+  centerLon: number,
+  options?: {
+    cellId?: string;
+    hailSizeCm?: number;
+    hailDescription?: string;
+  }
+): StormAlert {
+  const cellId = options?.cellId ?? 'CELL_HAIL_SIM_01';
+  const hailSizeCm = options?.hailSizeCm ?? 3.5;
+  const hailDescription =
+    options?.hailDescription ??
+    (hailSizeCm >= 5.0 ? 'Baseball-sized' : hailSizeCm >= 3.5 ? 'Golf ball-sized' : 'Quarter-sized');
+
   return {
-    cellId: `CELL_SIM_${Math.floor(1000 + Math.random() * 9000)}`,
+    cellId,
     event: 'Severe Thunderstorm & Hail',
     severity: 'WARNING',
-    hailSizeCm: 3.5,
-    hailDescription: 'Golf ball-sized',
+    hailSizeCm,
+    hailDescription,
     maxDbz: 62.5,
     speedKmh: 48,
     direction: 'ENE (65°)',
