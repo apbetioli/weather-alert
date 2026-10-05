@@ -1,8 +1,8 @@
 import { Worker } from 'bullmq';
-import { Bot } from 'grammy';
+import { Bot, GrammyError } from 'grammy';
 import { redis } from '../redis/client';
-import { ALERT_DISPATCH_QUEUE_NAME, AlertJobData } from './index';
-import { formatHailAlert } from '../bot/formatters';
+import { ALERT_DISPATCH_QUEUE_NAME, type AlertJobData } from './index';
+import { formatAlertHtml } from '../bot/formatters';
 
 export function startDispatchWorker(bot: Bot): Worker<AlertJobData> {
   const worker = new Worker<AlertJobData>(
@@ -14,12 +14,17 @@ export function startDispatchWorker(bot: Bot): Worker<AlertJobData> {
       );
 
       try {
-        const message = formatHailAlert(alert, user, reason);
+        const message = formatAlertHtml(alert, user, reason);
         await bot.api.sendMessage(user.telegramChatId, message, {
           parse_mode: 'HTML',
         });
         console.log(`✅ [Queue Worker] Successfully delivered alert to chat ${user.telegramChatId}`);
       } catch (err) {
+        if (err instanceof GrammyError && (err.error_code === 400 || err.error_code === 403)) {
+          console.warn(`⚠️ [Queue Worker] Invalid or blocked chat ${user.telegramChatId} (${err.description}). Skipping retry.`);
+          // Ideally, we would also delete this user from the database here.
+          return;
+        }
         console.error(`❌ [Queue Worker] Failed delivering alert to chat ${user.telegramChatId}:`, err);
         throw err; // Re-throw to trigger BullMQ retry/exponential backoff
       }

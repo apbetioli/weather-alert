@@ -30,34 +30,36 @@ export function generateStormPolygon(centerLat: number, centerLon: number, radiu
 }
 
 /**
- * Generates a realistic severe hail storm event centered at or approaching a given location.
+ * Generates a realistic severe storm event centered at or approaching a given location.
  */
-export function createSyntheticHailAlert(
+export function createSyntheticAlert(
   centerLat: number,
   centerLon: number,
   options?: {
     cellId?: string;
-    hailSizeCm?: number;
-    hailDescription?: string;
+    severityRank?: number;
   }
 ): StormAlert {
-  const cellId = options?.cellId ?? 'CELL_HAIL_SIM_01';
-  const hailSizeCm = options?.hailSizeCm ?? 3.5;
-  const hailDescription =
-    options?.hailDescription ??
-    (hailSizeCm >= 5.0 ? 'Baseball-sized' : hailSizeCm >= 3.5 ? 'Golf ball-sized' : 'Quarter-sized');
+  const cellId = options?.cellId ?? 'CELL_SIM_01';
+  const severityRank = options?.severityRank ?? 2;
+
+  const color = severityRank >= 3 ? 'RED' : severityRank === 2 ? 'ORANGE' : 'YELLOW';
+  const colorName = color;
+  const severity = color === 'RED' ? 'EMERGENCY' : color === 'ORANGE' ? 'WARNING' : 'WATCH';
 
   return {
     cellId,
-    event: 'Severe Thunderstorm & Hail',
-    severity: 'WARNING',
-    hailSizeCm,
-    hailDescription,
-    maxDbz: 62.5,
-    speedKmh: 48,
-    direction: 'ENE (65°)',
-    etaMinutes: 14,
+    event: 'Severe Weather Warning',
+    severity,
+    color,
+    colorName,
+    hazardType: 'THUNDERSTORM',
+    severityRank,
     polygonGeoJson: generateStormPolygon(centerLat, centerLon, 10),
-    instruction: 'Move vehicles under cover and secure outdoor glass/equipment immediately.',
+    instruction: 'Follow official guidance and avoid unnecessary travel.',
+    headline: 'Severe Weather Alert',
+    description: 'Rapidly moving severe weather system approaching the area.',
+    onset: new Date().toISOString(),
+    expires: new Date(Date.now() + 2 * 3600 * 1000).toISOString(),
   };
 }

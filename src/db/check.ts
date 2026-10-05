@@ -7,12 +7,12 @@ async function main() {
 
   try {
     const versionResult = await sql`SELECT version();`;
-    console.log(`✅ PostgreSQL Connected:`, versionResult[0].version);
+    console.log(`✅ PostgreSQL Connected:`, versionResult[0]?.version);
 
     // Ensure PostGIS extension is enabled
     await sql`CREATE EXTENSION IF NOT EXISTS postgis;`;
     const postgisVersion = await sql`SELECT PostGIS_Full_Version();`;
-    console.log(`✅ PostGIS Active:\n`, postgisVersion[0].postgis_full_version);
+    console.log(`✅ PostGIS Active:\n`, postgisVersion[0]?.postgis_full_version);
 
     process.exit(0);
   } catch (err) {
