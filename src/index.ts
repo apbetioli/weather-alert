@@ -4,10 +4,11 @@ import { redis } from './redis/client';
 import { createBot, startBot } from './bot';
 import { startDispatchWorker } from './queue/worker';
 import { startBullBoard } from './queue/dashboard';
+import { startBackgroundPoller } from './ingestion/poller';
 import { env } from './config/env';
 
 async function main() {
-  console.log('🚀 Weather Alert App (MVP 2) Initializing...');
+  console.log('🚀 Weather Alert App (MVP 3) Initializing...');
 
   // Start Bull Board UI Dashboard
   startBullBoard(env.PORT || 3000);
@@ -31,7 +32,10 @@ async function main() {
     process.exit(1);
   }
 
-  // 3. Initialize Telegram Bot & Asynchronous Worker
+  // 3. Start Meteogate European Warnings Background Poller
+  startBackgroundPoller();
+
+  // 4. Initialize Telegram Bot & Asynchronous Worker
   const bot = createBot();
   if (bot) {
     // Start BullMQ dispatch worker listening for queued alerts
@@ -41,7 +45,8 @@ async function main() {
     console.log(
       '\n💡 Headless Mode Active: You can still run automated spatial & deduplication simulations using:\n' +
         '   bun run simulate\n' +
-        '   bun run test:dedup\n'
+        '   bun run test:dedup\n' +
+        '   bun run poll\n'
     );
   }
 }

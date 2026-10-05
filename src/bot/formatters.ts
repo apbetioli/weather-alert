@@ -1,4 +1,10 @@
-import type { StormAlert, MatchedUser } from '../engine/types';
+import {
+  type StormAlert,
+  type MatchedUser,
+  METEOALARM_AWARENESS_LEVELS,
+  METEOALARM_HAZARDS,
+} from '../engine/types';
+import { env } from '../config/env';
 
 /**
  * Escapes reserved characters for Telegram HTML mode:
@@ -23,43 +29,69 @@ export function escapeMarkdownV2(text: string | number): string {
 }
 
 /**
- * Formats a severe hail storm alert into a safe, bulletproof Telegram HTML message.
- * HTML mode completely avoids MarkdownV2 escaping pitfalls with dots, hyphens, and tildes.
+ * Formats ISO timestamp unambiguously into European DD/MM/YYYY HH:mm format.
  */
-export function formatHailAlertHtml(alert: StormAlert, user: MatchedUser, reason?: string): string {
-  const now = new Date();
-  const etaDate = new Date(now.getTime() + alert.etaMinutes * 60 * 1000);
-  const etaClock = etaDate.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+export function formatDateTime(iso?: string): string {
+  if (!iso) return 'N/A';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return 'N/A';
+  const day = String(d.getDate()).padStart(2, '0');
+  const month = String(d.getMonth() + 1).padStart(2, '0');
+  const year = d.getFullYear();
+  const hours = String(d.getHours()).padStart(2, '0');
+  const minutes = String(d.getMinutes()).padStart(2, '0');
+  return `${day}/${month}/${year} ${hours}:${minutes}`;
+}
 
+export function formatDateWindow(onsetIso?: string, expiresIso?: string): string {
+  return `${formatDateTime(onsetIso)} → ${formatDateTime(expiresIso)}`;
+}
+
+/**
+ * Formats a weather alert into a safe, bulletproof Telegram HTML message
+ * using the official color code (🟡 Gialla, 🟠 Arancione, 🔴 Rossa) and MeteoAlarm symbols.
+ */
+export function formatAlertHtml(alert: StormAlert, user: MatchedUser, reason?: string): string {
   const escapedLocation = escapeHtml(user.locationName);
-  const escapedH3 = escapeHtml(user.h3Res7);
-  const escapedHailCm = escapeHtml(alert.hailSizeCm);
-  const escapedHailDesc = escapeHtml(alert.hailDescription);
-  const escapedSpeed = escapeHtml(alert.speedKmh);
-  const escapedDirection = escapeHtml(alert.direction);
-  const escapedDbz = escapeHtml(alert.maxDbz);
+  const escapedH3 = escapeHtml(user.h3Index);
   const escapedInstruction = escapeHtml(alert.instruction);
+
+  // Determine official color badge and name
+  const color = alert.color || (alert.severity === 'EMERGENCY' ? 'RED' : alert.severity === 'WARNING' ? 'ORANGE' : 'YELLOW');
+  const colorBadge = color === 'RED' ? '🔴' : color === 'ORANGE' ? '🟠' : '🟡';
+  const colorName = color === 'RED' ? 'RED ALERT' : color === 'ORANGE' ? 'ORANGE ALERT' : 'YELLOW ALERT';
+
+  const hazardMeta = METEOALARM_HAZARDS[alert.hazardType] || METEOALARM_HAZARDS.OTHER;
+  const awareness = METEOALARM_AWARENESS_LEVELS[color];
 
   const escalationBadge =
     reason === 'ESCALATION'
-      ? `🔺 <b>ESCALATION: HAIL SEVERITY INCREASED TO ${escapedHailCm} CM!</b> 🔺\n\n`
+      ? `🔺 <b>ESCALATION: ALERT SEVERITY INCREASED TO ${colorName}!</b> 🔺\n\n`
       : '';
+
+  const validitySection =
+    alert.onset || alert.expires
+      ? `• <b>Validity Period:</b> <code>${formatDateWindow(alert.onset, alert.expires)}</code>\n`
+      : '';
+
+  const metricsSection =
+    `• <b>Hazard:</b> ${hazardMeta.symbol} ${escapeHtml(hazardMeta.nameEn)}\n` +
+    (alert.description ? `• <b>Details:</b> <i>${escapeHtml(alert.description.slice(0, 180))}...</i>\n` : '');
+
+  const guidanceSection = awareness
+    ? `ℹ️ <b>Official Level:</b> ${escapeHtml(awareness.summary)}\n\n`
+    : '\n';
 
   return (
     escalationBadge +
-    `⚠️ <b>SEVERE WEATHER ALERT: HAIL DETECTED</b>\n\n` +
-    `A severe convective storm cell is tracking toward your monitored location (<b>${escapedLocation}</b>).\n\n` +
-    `• <b>Est. Arrival Time (ETA):</b> ~${alert.etaMinutes} min (${etaClock})\n` +
-    `• <b>Predicted Hail Diameter:</b> ${escapedHailCm} cm (${escapedHailDesc})\n` +
-    `• <b>Storm Velocity:</b> ${escapedSpeed} km/h moving ${escapedDirection}\n` +
-    `• <b>Radar Core Intensity:</b> ${escapedDbz} dBZ\n` +
-    `• <b>Spatial Index (H3 Res 7):</b> <code>${escapedH3}</code>\n\n` +
-    `🚗 <b>Recommended Action:</b>\n` +
+    `${colorBadge} <b>${colorName}: ${hazardMeta.symbol} ${escapeHtml(alert.event)}</b>\n\n` +
+    `📍 <b>Monitored Area:</b> ${escapedLocation}\n\n` +
+    validitySection +
+    metricsSection +
+    `• <b>Spatial Index (H3 Res ${env.H3_RESOLUTION}):</b> <code>${escapedH3}</code>\n\n` +
+    guidanceSection +
+    `🛡️ <b>Recommended Actions:</b>\n` +
     `${escapedInstruction}`
   );
 }
 
-/**
- * Backward-compatible alias defaulting to bulletproof HTML formatting.
- */
-export const formatHailAlert = formatHailAlertHtml;
