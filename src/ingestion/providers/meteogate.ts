@@ -11,12 +11,12 @@ import type {
   ParsedAwarenessType,
 } from '../types';
 
-export const METEOGATE_BASE_URL = env.METEOGATE_API_URL;
+const METEOGATE_BASE_URL = env.METEOGATE_API_URL;
 
 /**
  * Parses CAP parameter "awareness_level" (e.g. "2; yellow; Moderate")
  */
-export function parseAwarenessLevel(paramValue?: string): ParsedAwarenessLevel | undefined {
+function parseAwarenessLevel(paramValue?: string): ParsedAwarenessLevel | undefined {
   if (!paramValue || typeof paramValue !== 'string') return undefined;
   const parts = paramValue.split(';').map((s) => s.trim());
   const numeric = parseInt(parts[0] || '1', 10);
@@ -32,7 +32,7 @@ export function parseAwarenessLevel(paramValue?: string): ParsedAwarenessLevel |
 /**
  * Parses CAP parameter "awareness_type" (e.g. "1; Wind" or "3; Thunderstorm")
  */
-export function parseAwarenessType(paramValue?: string): ParsedAwarenessType | undefined {
+function parseAwarenessType(paramValue?: string): ParsedAwarenessType | undefined {
   if (!paramValue || typeof paramValue !== 'string') return undefined;
   const parts = paramValue.split(';').map((s) => s.trim());
   const typeCode = parseInt(parts[0] || '0', 10);
@@ -297,7 +297,6 @@ export async function fetchMeteogateWarnings(
     // Process active features concurrently
     const processedAlerts = await mapConcurrent(activeFeatures, 8, async (feature) => {
       const alertId = feature.properties?.alertId || feature.id;
-      const objectId = feature.properties?.OBJECTID || feature.id;
       const countryCode = feature.properties?.countryCode || 'EU';
 
       // 1. Fetch CAP detail JSON (geometry is fetched later if needed)

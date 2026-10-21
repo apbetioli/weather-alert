@@ -1,6 +1,6 @@
 import { redis } from './client';
 
-export const DEDUP_LUA_SCRIPT = `
+const DEDUP_LUA_SCRIPT = `
 local exists = redis.call('EXISTS', KEYS[1])
 if exists == 0 then
   redis.call('HSET', KEYS[1], 'last_notified_at', ARGV[1], 'severity_rank', ARGV[2], 'dispatch_count', 1)
@@ -36,8 +36,8 @@ redis.call('EXPIRE', KEYS[1], ARGV[4])
 return 0 -- SUPPRESS
 `;
 
-export const COOLDOWN_SECONDS = 86400; // 24 hours
-export const KEY_TTL_SECONDS = 172800; // 48 hours; retain state beyond the cooldown
+const COOLDOWN_SECONDS = 86400; // 24 hours
+const KEY_TTL_SECONDS = 172800; // 48 hours; retain state beyond the cooldown
 
 export type DedupReason = 'INITIAL_ALERT' | 'ESCALATION' | 'COOLDOWN_EXPIRED' | 'SUPPRESSED';
 

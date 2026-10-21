@@ -1,5 +1,4 @@
-import { pgTable, serial, varchar, bigint, timestamp, uuid, customType, index, boolean } from 'drizzle-orm/pg-core';
-import { sql } from 'drizzle-orm';
+import { pgTable, serial, varchar, bigint, timestamp, uuid, customType, index } from 'drizzle-orm/pg-core';
 
 // Custom Drizzle type mapping for PostGIS Geography(Point, 4326)
 export const geographyPoint = customType<{ data: string; driverData: string }>({
@@ -39,9 +38,6 @@ export const userAlertZones = pgTable(
   ]
 );
 
-export type UserAlertZone = typeof userAlertZones.$inferSelect;
-export type NewUserAlertZone = typeof userAlertZones.$inferInsert;
-
 export const meteoalarmZones = pgTable('meteoalarm_zones', {
   id: serial('id').primaryKey(),
   emmaId: varchar('emma_id', { length: 32 }).notNull().unique(),
@@ -52,6 +48,3 @@ export const meteoalarmZones = pgTable('meteoalarm_zones', {
 }, (table) => [
   index('idx_meteoalarm_zones_geom').using('gist', table.geometry)
 ]);
-
-export type MeteoalarmZone = typeof meteoalarmZones.$inferSelect;
-export type NewMeteoalarmZone = typeof meteoalarmZones.$inferInsert;
