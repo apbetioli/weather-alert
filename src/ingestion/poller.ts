@@ -1,7 +1,7 @@
 import { fetchMeteogateWarnings } from './providers/meteogate';
-import { normalizeMeteoAlarmAlert } from './normalizer';
+import { mergeMeteoAlarmWarningAreas, normalizeMeteoAlarmAlert } from './normalizer';
 import { matchStormUsingH3 } from '../engine/h3-matcher';
-import { evaluateAlertDeduplication } from '../redis/deduplicator';
+import { evaluateAlertDeduplication, releaseFailedAlertDispatch } from '../redis/deduplicator';
 import { enqueueAlertDispatch } from '../queue';
 
 export interface PollResult {
@@ -19,11 +19,22 @@ export interface PollResult {
  * 4. Pass each candidate through the Redis Lua Deduplication Gate
  * 5. Enqueue approved alerts into BullMQ for async delivery
  */
-export async function pollMeteoAlarmAlerts(): Promise<PollResult> {
+let activePoll: Promise<PollResult> | undefined;
+
+export function pollMeteoAlarmAlerts(): Promise<PollResult> {
+  if (activePoll) return activePoll;
+  activePoll = runMeteoAlarmPoll().finally(() => {
+    activePoll = undefined;
+  });
+  return activePoll;
+}
+
+async function runMeteoAlarmPoll(): Promise<PollResult> {
   const startTime = performance.now();
   console.log('🔄 [Poller] Starting Meteogate European warnings poll sweep...');
 
-  const rawAlerts = await fetchMeteogateWarnings();
+  const rawAlertFeatures = await fetchMeteogateWarnings();
+  const rawAlerts = mergeMeteoAlarmWarningAreas(rawAlertFeatures);
   const totalAlerts = rawAlerts.length;
 
   const uniqueMatchedUsers = new Set<number>();
@@ -32,6 +43,7 @@ export async function pollMeteoAlarmAlerts(): Promise<PollResult> {
   let suppressedAlertsCount = 0;
 
   for (const raw of rawAlerts) {
+    try {
     const alert = normalizeMeteoAlarmAlert(raw);
 
     // Guard: ignore alerts that have already expired
@@ -60,7 +72,9 @@ export async function pollMeteoAlarmAlerts(): Promise<PollResult> {
       const dedup = await evaluateAlertDeduplication(
         user.telegramChatId,
         alert.cellId,
-        alert.severityRank
+        alert.severityRank,
+        undefined,
+        alert.expires
       );
 
       if (dedup.shouldSend) {
@@ -68,17 +82,26 @@ export async function pollMeteoAlarmAlerts(): Promise<PollResult> {
         console.log(
           `🚀 [Poller] Approved alert for chat ${user.telegramChatId} (${user.locationName}) - Warning: "${alert.event}" [Reason: ${dedup.reason}]`
         );
-        await enqueueAlertDispatch({
-          alert,
-          user,
-          reason: dedup.reason,
-        });
+        try {
+          await enqueueAlertDispatch({
+            alert,
+            user,
+            reason: dedup.reason,
+            dedupTimestamp: dedup.timestamp,
+          });
+        } catch (err) {
+          await releaseFailedAlertDispatch(user.telegramChatId, alert.cellId, dedup.timestamp);
+          throw err;
+        }
       } else {
         suppressedAlertsCount++;
         console.log(
           `🛑 [Poller] Suppressed redundant alert for chat ${user.telegramChatId} (Cell: ${alert.cellId})`
         );
       }
+    }
+    } catch (err) {
+      console.error(`❌ [Poller] Skipping failed alert ${raw.identifier}:`, err);
     }
   }
 
@@ -96,18 +119,25 @@ export async function pollMeteoAlarmAlerts(): Promise<PollResult> {
 }
 
 /**
- * Starts the recurring background polling service.
+ * Starts the recurring authoritative warning polling service.
  * Default interval: 10 minutes (600,000 ms), aligned with MeteoAlarm publication cadence.
  */
 export function startBackgroundPoller(intervalMs: number = 10 * 60 * 1000): NodeJS.Timeout {
   console.log(
     `⏰ [Poller] Background MeteoAlarm Poller scheduled every ${(intervalMs / 1000 / 60).toFixed(0)} minutes.`
   );
+  const radarIntervalMs = 5 * 60 * 1000;
+  console.log('⏰ [Poller] Background radar tracking scheduled every 5 minutes.');
 
   // Run initial poll sweep after a short delay (e.g. 5 seconds) to allow server startup
   setTimeout(() => {
     pollMeteoAlarmAlerts().catch((err) => {
       console.error('❌ [Poller] Error in initial background poll:', err);
+    });
+    import('../radar').then(({ fetchLiveRadarCells }) => {
+      fetchLiveRadarCells().catch((err) => {
+        console.error('❌ [Poller] Error in initial radar tracking scan:', err);
+      });
     });
   }, 5000);
 
@@ -116,6 +146,14 @@ export function startBackgroundPoller(intervalMs: number = 10 * 60 * 1000): Node
       console.error('❌ [Poller] Error in scheduled background poll:', err);
     });
   }, intervalMs);
+
+  setInterval(() => {
+    import('../radar').then(({ fetchLiveRadarCells }) => {
+      fetchLiveRadarCells().catch((err) => {
+        console.error('❌ [Poller] Error in scheduled radar tracking scan:', err);
+      });
+    });
+  }, radarIntervalMs);
 
   return timer;
 }

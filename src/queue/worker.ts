@@ -2,27 +2,32 @@ import { Worker } from 'bullmq';
 import { Bot, GrammyError } from 'grammy';
 import { redis } from '../redis/client';
 import { ALERT_DISPATCH_QUEUE_NAME, type AlertJobData } from './index';
-import { formatAlertHtml } from '../bot/formatters';
+import { formatAlertHtml, formatRadarApproachHtml } from '../bot/formatters';
+import { releaseFailedAlertDispatch } from '../redis/deduplicator';
 
 export function startDispatchWorker(bot: Bot): Worker<AlertJobData> {
   const worker = new Worker<AlertJobData>(
     ALERT_DISPATCH_QUEUE_NAME,
     async (job) => {
-      const { alert, user, reason } = job.data;
+      const { user, reason } = job.data;
       console.log(
         `📬 [Queue Worker] Processing alert job ${job.id} for user ${user.telegramChatId} (${user.locationName}) [Reason: ${reason}]`
       );
 
       try {
-        const message = formatAlertHtml(alert, user, reason);
+        const message = 'radar' in job.data
+          ? formatRadarApproachHtml(job.data.radar, user)
+          : formatAlertHtml(job.data.alert, user, reason);
         await bot.api.sendMessage(user.telegramChatId, message, {
           parse_mode: 'HTML',
         });
         console.log(`✅ [Queue Worker] Successfully delivered alert to chat ${user.telegramChatId}`);
       } catch (err) {
-        if (err instanceof GrammyError && (err.error_code === 400 || err.error_code === 403)) {
-          console.warn(`⚠️ [Queue Worker] Invalid or blocked chat ${user.telegramChatId} (${err.description}). Skipping retry.`);
-          // Ideally, we would also delete this user from the database here.
+        if (err instanceof GrammyError && (
+          err.error_code === 403 ||
+          (err.error_code === 400 && /chat not found|user is deactivated|bot was blocked|can't initiate conversation/i.test(err.description))
+        )) {
+          console.warn(`⚠️ [Queue Worker] Unreachable chat ${user.telegramChatId} (${err.description}). Skipping retry.`);
           return;
         }
         console.error(`❌ [Queue Worker] Failed delivering alert to chat ${user.telegramChatId}:`, err);
@@ -44,6 +49,14 @@ export function startDispatchWorker(bot: Bot): Worker<AlertJobData> {
 
   worker.on('failed', (job, err) => {
     console.error(`⚠️ [Queue Worker] Job ${job?.id} failed after ${job?.attemptsMade} attempt(s):`, err.message);
+    if (job && job.attemptsMade >= (job.opts.attempts ?? 1) && job.data.dedupTimestamp !== undefined) {
+      const cellId = 'alert' in job.data ? job.data.alert.cellId : job.data.radar.stormCellId;
+      releaseFailedAlertDispatch(
+        job.data.user.telegramChatId,
+        cellId,
+        job.data.dedupTimestamp
+      ).catch((releaseError) => console.error('Failed to release alert dedup state:', releaseError));
+    }
   });
 
   worker.on('error', (err) => {

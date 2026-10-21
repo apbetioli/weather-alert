@@ -32,7 +32,13 @@ export function createBot(): Bot | null {
         delete fallbackPayload.entities;
         if (typeof fallbackPayload.text === 'string') {
           // Strip formatting tags so plain text is clean
-          fallbackPayload.text = fallbackPayload.text.replace(/<[^>]*>/g, '');
+          fallbackPayload.text = fallbackPayload.text
+            .replace(/<[^>]*>/g, '')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#39;/g, "'");
         }
         return await prev(method, fallbackPayload, signal);
       }

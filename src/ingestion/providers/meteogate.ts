@@ -1,5 +1,7 @@
 import { env } from '../../config/env';
 import { redis } from '../../redis/client';
+import { db } from '../../db';
+import { sql } from 'drizzle-orm';
 import type {
   MeteoGateFeatureCollection,
   MeteoGateFeature,
@@ -47,7 +49,6 @@ export interface FetchMeteogateOptions {
   locationId?: string;       // "ALL" or country code like "IT", "FR", "DE"
   apiKey?: string;
   minAwarenessLevel?: number; // 2 = yellow+, 3 = orange+, 4 = red
-  pastHours?: number;         // default 6h in the past
   futureHours?: number;       // default 18h in the future (total <= 24h)
   maxAlerts?: number;
   timeoutMs?: number;
@@ -60,8 +61,8 @@ async function mapConcurrent<T, R>(
   items: T[],
   concurrency: number,
   fn: (item: T) => Promise<R>
-): Promise<R[]> {
-  const results: R[] = new Array(items.length);
+): Promise<(R | null)[]> {
+  const results: (R | null)[] = new Array(items.length);
   let currentIndex = 0;
 
   async function worker() {
@@ -70,7 +71,9 @@ async function mapConcurrent<T, R>(
       try {
         results[idx] = await fn(items[idx]!);
       } catch (err) {
-        // Handled within fn
+        // Preserve the slot so one bad feature does not poison the full batch.
+        console.warn('⚠️ [Meteogate Ingestion] Skipping feature after processing error:', err);
+        results[idx] = null;
       }
     }
   }
@@ -130,19 +133,11 @@ async function fetchFeatureGeometry(
         }
       }
     } catch {
-      // Fall through to bounding box fallback
+      // No authoritative geometry was returned.
     }
   }
 
-  // Fallback to feature.geometry if available (bbox polygon)
-  if (feature.geometry && feature.geometry.coordinates) {
-    const fallback = {
-      type: 'Polygon' as const,
-      coordinates: feature.geometry.coordinates,
-    };
-    return fallback;
-  }
-
+  // feature.geometry may only be a coarse bounding box; never use it as a zone boundary.
   return null;
 }
 
@@ -206,16 +201,16 @@ export async function fetchMeteogateWarnings(
   const locationId = options.locationId || env.METEOGATE_LOCATION || 'ALL';
   const apiKey = options.apiKey || env.METEOGATE_API_KEY || '';
   const minAwareness = options.minAwarenessLevel ?? 2; // Default: yellow, orange, red (skip green)
-  const pastHours = options.pastHours ?? 6;
-  const futureHours = options.futureHours ?? 18; // 6 + 18 = 24h total
+  const futureHours = options.futureHours ?? 18;
   const timeoutMs = options.timeoutMs ?? 10000;
-  const maxAlerts = options.maxAlerts ?? 100;
+  // ALL can span many countries, so a small cap can fill before local warnings
+  // appear later in the paginated feed.
+  const maxAlerts = options.maxAlerts ?? 1000;
 
-  const pastIso = new Date(Date.now() - pastHours * 3600 * 1000).toISOString();
+  const now = new Date();
+  const activeFromIso = now.toISOString();
   const futureIso = new Date(Date.now() + futureHours * 3600 * 1000).toISOString();
-  const datetimeParam = `${pastIso}/${futureIso}`;
-
-  const url = `${METEOGATE_BASE_URL}/collections/warnings/locations/${locationId}?f=json&datetime=${encodeURIComponent(datetimeParam)}`;
+  const baseUrl = METEOGATE_BASE_URL.replace(/\/+$/, '');
 
   const headers: Record<string, string> = {
     Accept: 'application/geo+json, application/json',
@@ -228,39 +223,68 @@ export async function fetchMeteogateWarnings(
 
   try {
     console.log(
-      `📡 [Meteogate Ingestion] Fetching warnings for location "${locationId}" (window: -${pastHours}h..+${futureHours}h)...`
+      `📡 [Meteogate Ingestion] Fetching warnings for location "${locationId}" (active now through +${futureHours}h)...`
     );
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+    // EDR pages are 100 features by default. Keep advancing when a page is
+    // entirely superseded so it cannot hide current alerts on later pages.
+    const pageSize = 100;
+    const maxPagesPerWindow = 10;
+    const messageWindowMs = 23 * 60 * 60 * 1000;
+    const lookbackMs = 30 * 24 * 60 * 60 * 1000;
+    let rawFeatureCount = 0;
+    let pagesFetched = 0;
+    const activeFeatures: MeteoGateFeature[] = [];
 
-    const response = await fetch(url, {
-      signal: controller.signal,
-      headers,
-    });
-    clearTimeout(timeoutId);
+    // Query bounded, non-overlapping message windows to respect the API's
+    // sub-24-hour datetime limit while retaining long-running active alerts.
+    for (let windowEnd = now.getTime(); windowEnd > now.getTime() - lookbackMs && activeFeatures.length < maxAlerts; windowEnd -= messageWindowMs) {
+      const windowStart = Math.max(windowEnd - messageWindowMs, now.getTime() - lookbackMs);
+      const windowEndIso = new Date(windowEnd).toISOString();
+      const windowStartIso = new Date(windowStart).toISOString();
+      let page = 1;
+      for (; page <= maxPagesPerWindow && activeFeatures.length < maxAlerts; page++) {
+        const url = new URL(
+          `${baseUrl}/collections/warnings/locations/${encodeURIComponent(locationId)}`
+        );
+        url.searchParams.set('f', 'json');
+        url.searchParams.set('datetime', `${windowStartIso}/${windowEndIso}`);
+        url.searchParams.set('active', `${activeFromIso}/${futureIso}`);
+        url.searchParams.set('page', String(page));
 
-    // 204 No Content indicates no active warnings matching criteria
-    if (response.status === 204) {
-      console.log('ℹ️ [Meteogate Ingestion] Meteogate returned 204 No Content (no active warnings).');
-      return [];
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+        let response: Response;
+        try {
+          response = await fetch(url, { signal: controller.signal, headers });
+        } finally {
+          clearTimeout(timeoutId);
+        }
+
+        if (response.status === 204) break;
+        if (!response.ok) {
+          const responseBody = (await response.text()).slice(0, 500);
+          throw new Error(`HTTP ${response.status} ${response.statusText}: ${responseBody}`);
+        }
+
+        const collection = (await response.json()) as MeteoGateFeatureCollection;
+        const pageFeatures = collection.features || [];
+        pagesFetched++;
+        rawFeatureCount += pageFeatures.length;
+        activeFeatures.push(...pageFeatures.filter((f) => !f.properties?.supersededByAlertId));
+        if (pageFeatures.length < pageSize) break;
+      }
+      if (page > maxPagesPerWindow) {
+        console.warn(`⚠️ [Meteogate Ingestion] Reached pagination safety limit for ${windowStartIso}.`);
+      }
     }
 
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status} ${response.statusText}`);
-    }
-
-    const collection = (await response.json()) as MeteoGateFeatureCollection;
-    const rawFeatures = collection.features || [];
-
-    // Filter out superseded features and limit count
-    const activeFeatures = rawFeatures
-      .filter((f) => !f.properties?.supersededByAlertId)
-      .slice(0, maxAlerts);
+    activeFeatures.length = Math.min(activeFeatures.length, maxAlerts);
 
     console.log(
-      `📥 [Meteogate Ingestion] Received ${rawFeatures.length} features (${activeFeatures.length} active/non-superseded).`
+      `📥 [Meteogate Ingestion] Received ${rawFeatureCount} features across ${pagesFetched} page(s) (${activeFeatures.length} active/non-superseded).`
     );
+
 
     if (activeFeatures.length === 0) {
       return [];
@@ -272,26 +296,96 @@ export async function fetchMeteogateWarnings(
       const objectId = feature.properties?.OBJECTID || feature.id;
       const countryCode = feature.properties?.countryCode || 'EU';
 
-      // 1. Fetch CAP detail JSON and exact geometry in parallel
-      const [detail, geom] = await Promise.all([
-        fetchAlertDetail(feature, 5000),
-        fetchFeatureGeometry(feature, 5000),
-      ]);
+      // 1. Fetch CAP detail JSON (geometry is fetched later if needed)
+      const detail = await fetchAlertDetail(feature, 5000);
 
-      if (!geom || !geom.coordinates || geom.coordinates.length === 0) {
-        return null;
+      // CAP updates reference the previous message. Carry its canonical dedup
+      // ID forward so updates enter the existing severity escalation state.
+      const referencedId = detail?.references
+        ?.trim()
+        .split(/\s+/)[0]
+        ?.split(',')[1];
+      let dedupId = detail?.incidents?.trim() || referencedId || String(alertId);
+      if (referencedId) {
+        try {
+          dedupId = (await redis.get(`meteogate:canonical:${referencedId}`)) || dedupId;
+        } catch {
+          // The CAP incident/reference ID still provides a stable fallback.
+        }
+      }
+      try {
+        await redis.setex(`meteogate:canonical:${alertId}`, 30 * 86400, dedupId);
+      } catch {
+        // Dedup remains functional for this alert even if alias caching fails.
       }
 
+      let geom: any = null;
+
       // 2. Select appropriate CAP info block
-      let selectedInfo = detail?.info?.[0];
-      if (detail?.info && detail.info.length > 1) {
-        // Prefer local or English info block matching hub language
+      const featureInfoIndex = feature.properties?.indexInfo;
+      const indexedInfo = Number.isInteger(featureInfoIndex) && featureInfoIndex >= 0
+        ? detail?.info?.[featureInfoIndex]
+        : undefined;
+      let selectedInfo = indexedInfo || detail?.info?.[0];
+      if (!indexedInfo && detail?.info && detail.info.length > 1) {
         const targetLang = (feature.properties?.hubLanguage || 'en').toLowerCase();
         selectedInfo =
           detail.info.find((i) => i.language?.toLowerCase().startsWith(targetLang)) ||
           detail.info.find((i) => i.language?.toLowerCase().startsWith('en')) ||
           detail.info[0];
       }
+
+      const featureAreaIndex = feature.properties?.indexArea;
+      const selectedArea = Number.isInteger(featureAreaIndex) && featureAreaIndex! >= 0
+        ? selectedInfo?.area?.[featureAreaIndex!]
+        : selectedInfo?.area?.[0];
+
+      // Try to find EMMA_ID to get authoritative boundary from DB
+      const emmaId = selectedArea?.geocode?.find((g) => g.valueName === 'EMMA_ID')?.value;
+      if (emmaId) {
+        try {
+          const res = await db.execute(sql`SELECT ST_AsGeoJSON(geometry) as geojson FROM meteoalarm_zones WHERE emma_id = ${emmaId}`);
+          if (res.length > 0 && res[0]?.geojson) {
+            geom = JSON.parse(res[0].geojson as string);
+            console.log(`🗺️ [Meteogate Ingestion] Using authoritative boundary from DB for EMMA_ID: ${emmaId}`);
+          }
+        } catch (dbErr) {
+          console.error(`❌ [Meteogate Ingestion] DB geometry fetch failed for EMMA_ID ${emmaId}:`, dbErr);
+        }
+      }
+
+      // Fallback to Meteogate geometry link if DB missing
+      if (!geom) {
+        geom = await fetchFeatureGeometry(feature, 5000);
+        
+        // If we successfully fetched it and we have an EMMA_ID, save it to the DB for next time
+        if (geom && geom.coordinates && geom.coordinates.length > 0 && emmaId) {
+          try {
+            const countryCode = feature.properties?.countryCode || 'EU';
+            const name = selectedArea?.areaDesc || countryCode;
+            const geomStr = JSON.stringify(geom);
+            
+            await db.execute(sql`
+              INSERT INTO meteoalarm_zones (emma_id, country_code, name, geometry)
+              VALUES (
+                ${emmaId},
+                ${countryCode},
+                ${name},
+                ST_Multi(ST_GeomFromGeoJSON(${geomStr}))
+              )
+              ON CONFLICT (emma_id) DO NOTHING
+            `);
+            console.log(`💾 [Meteogate Ingestion] Saved new authoritative boundary to DB for EMMA_ID: ${emmaId}`);
+          } catch (dbErr) {
+            console.error(`❌ [Meteogate Ingestion] DB geometry save failed for EMMA_ID ${emmaId}:`, dbErr);
+          }
+        }
+      }
+
+      if (!geom || !geom.coordinates || geom.coordinates.length === 0) {
+        return null;
+      }
+
 
       const params = selectedInfo?.parameter || [];
       const awarenessLevelStr = params.find((p) => p.valueName === 'awareness_level')?.value;
@@ -315,16 +409,15 @@ export async function fetchMeteogateWarnings(
       }
 
       // Area description
-      const areaDesc =
-        selectedInfo?.area?.[feature.properties?.indexArea || 0]?.areaDesc ||
-        selectedInfo?.area?.[0]?.areaDesc ||
-        countryCode;
+      const areaDesc = selectedArea?.areaDesc || countryCode;
 
       const event = selectedInfo?.event || 'Weather Warning';
       const severity = selectedInfo?.severity || parsedLevel?.severityLabel || 'Moderate';
 
       const alert: RawMeteoAlarmAlert = {
-        identifier: `${alertId}_${objectId}`,
+        // OBJECTID identifies a feature/area row, not the CAP warning. Use the
+        // warning ID so multiple area features for one warning share dedup state.
+        identifier: String(dedupId),
         event,
         severity,
         areaDesc,
@@ -345,7 +438,7 @@ export async function fetchMeteogateWarnings(
       return alert;
     });
 
-    const validAlerts = processedAlerts.filter((a): a is RawMeteoAlarmAlert => a !== null);
+    const validAlerts = processedAlerts.filter((a): a is RawMeteoAlarmAlert => a != null);
     console.log(
       `✅ [Meteogate Ingestion] Successfully normalized ${validAlerts.length} warning(s) with exact polygon geometry.`
     );

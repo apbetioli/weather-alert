@@ -56,7 +56,7 @@ export function registerBotHandlers(bot: Bot) {
         '/testh3match — Benchmark H3 vs PostGIS speed\n' +
         '/testalert — Simulate a storm alert test\n' +
         '/testescalate — Simulate an escalation test (Red Alert)\n' +
-        '/resetalerts — Reset cooldown window (45 min)',
+        '/resetalerts — Reset alert deduplication state',
       { parse_mode: 'HTML' }
     );
   });
@@ -161,11 +161,19 @@ export function registerBotHandlers(bot: Bot) {
       );
     }
 
-    await db.execute(sql`
+    if (newName.length > 100) {
+      return await ctx.reply('⚠️ Location names must be 100 characters or fewer.');
+    }
+
+    const result = await db.execute(sql`
       UPDATE user_alert_zones
       SET location_name = ${newName}, updated_at = NOW()
       WHERE telegram_chat_id = ${chatId};
     `);
+
+    if (!result.count) {
+      return await ctx.reply('⚠️ Register a location first with /start before renaming it.');
+    }
 
     await ctx.reply(`✅ <b>Location name updated to:</b> ${escapeHtml(newName)}`, {
       parse_mode: 'HTML',
@@ -203,7 +211,7 @@ export function registerBotHandlers(bot: Bot) {
     const alert = createSyntheticAlert(Number(user.lat), Number(user.lon));
 
     // Run spatial evaluation via PostGIS ST_Covers
-    const matchedUsers = await matchStormToUsers(alert);
+    const matchedUsers = (await matchStormToUsers(alert)).filter((user) => user.telegramChatId === chatId);
 
     // Dispatch notification via Deduplication Gate & BullMQ Queue
     for (const matched of matchedUsers) {
@@ -211,14 +219,16 @@ export function registerBotHandlers(bot: Bot) {
       const dedup = await evaluateAlertDeduplication(
         matched.telegramChatId,
         alert.cellId,
-        alert.severityRank
+        alert.severityRank,
+        undefined,
+        alert.expires
       );
 
       if (dedup.shouldSend) {
         console.log(
           `🚀 [Deduplicator] Approved alert for user ${matched.telegramChatId} (Reason: ${dedup.reason}). Enqueueing...`
         );
-        await enqueueAlertDispatch({ alert, user: matched, reason: dedup.reason });
+        await enqueueAlertDispatch({ alert, user: matched, reason: dedup.reason, dedupTimestamp: dedup.timestamp });
       } else {
         console.log(
           `🛑 [Deduplicator] Alert suppressed for user ${matched.telegramChatId} by Redis cooldown (Reason: ${dedup.reason}).`
@@ -226,7 +236,7 @@ export function registerBotHandlers(bot: Bot) {
         await ctx.reply(
           `⏳ <b>Alert Suppressed by Redis Deduplication Gate</b>\n\n` +
             `• <b>Storm Cell:</b> <code>${escapeHtml(alert.cellId)}</code>\n` +
-            `• <b>Cooldown Window:</b> 45 minutes active\n` +
+            `• <b>Repeat Suppression:</b> ${alert.expires ? 'until warning expiry' : '24 hours'}\n` +
             `• <b>Reason:</b> Severity unchanged (${escapeHtml(alert.colorName)})\n\n` +
             `<i>Alerts will resume if severity increases (escalation bypass), or after the cooldown expires.</i>`,
           { parse_mode: 'HTML' }
@@ -266,20 +276,22 @@ export function registerBotHandlers(bot: Bot) {
       severityRank: 3,
     });
 
-    const matchedUsers = await matchStormToUsers(alert);
+    const matchedUsers = (await matchStormToUsers(alert)).filter((user) => user.telegramChatId === chatId);
 
     for (const matched of matchedUsers) {
       const dedup = await evaluateAlertDeduplication(
         matched.telegramChatId,
         alert.cellId,
-        alert.severityRank
+        alert.severityRank,
+        undefined,
+        alert.expires
       );
 
       if (dedup.shouldSend) {
         console.log(
           `🚀 [Deduplicator] Approved alert for user ${matched.telegramChatId} (Reason: ${dedup.reason}). Enqueueing...`
         );
-        await enqueueAlertDispatch({ alert, user: matched, reason: dedup.reason });
+        await enqueueAlertDispatch({ alert, user: matched, reason: dedup.reason, dedupTimestamp: dedup.timestamp });
       } else {
         await ctx.reply(
           `⏳ <b>Alert Suppressed: Cooldown still active and no escalation detected.</b>`,
@@ -310,13 +322,16 @@ export function registerBotHandlers(bot: Bot) {
     await ctx.reply('📡 <b>Checking live official Meteogate Warnings API...</b>', { parse_mode: 'HTML' });
     try {
       const result = await pollMeteoAlarmAlerts();
+      const evaluationNote = result.totalAlerts === 0
+        ? 'MeteoGate returned no usable active warning features, so location matching was skipped.'
+        : `Active warning features were matched using Inverted H3 Resolution ${env.H3_RESOLUTION}.`;
       await ctx.reply(
         `🛰️ <b>Meteogate Warnings API Polling Complete</b>\n\n` +
           `• <b>Active Warnings Evaluated:</b> ${result.totalAlerts}\n` +
           `• <b>Users in Hazard Zones:</b> ${result.matchedUsers}\n` +
           `• <b>Alerts Dispatched:</b> ${result.approvedAlerts}\n` +
-          `• <b>Alerts Suppressed (Cooldown):</b> ${result.suppressedAlerts}\n\n` +
-          `<i>All active warnings with exact European region boundaries were evaluated against registered locations using Inverted H3 Resolution ${env.H3_RESOLUTION} matching.</i>`,
+          `• <b>Duplicate Alerts Suppressed:</b> ${result.suppressedAlerts}\n\n` +
+          `<i>${escapeHtml(evaluationNote)}</i>`,
         { parse_mode: 'HTML' }
       );
     } catch (err: any) {

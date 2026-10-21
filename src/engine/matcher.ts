@@ -3,6 +3,7 @@ import * as h3 from 'h3-js';
 import { db } from '../db';
 import type { StormAlert, MatchedUser } from './types';
 import { alertToH3Cells } from './h3-matcher';
+import { env } from '../config/env';
 
 /**
  * Evaluates a storm alert polygon against all registered user locations in PostGIS.
@@ -40,7 +41,7 @@ export async function matchStormToUsers(alert: StormAlert): Promise<MatchedUser[
   // Educational H3 analysis: calculate which H3 cells are covered by the storm polygon
   try {
     const stormH3Cells = alertToH3Cells(alert);
-    const avgHexAreaKm2 = h3.getHexagonAreaAvg(6, 'km2'); // Used for estimation only
+    const avgHexAreaKm2 = h3.getHexagonAreaAvg(env.H3_RESOLUTION, 'km2'); // Used for estimation only
     const totalHazardAreaKm2 = (stormH3Cells.length * avgHexAreaKm2).toFixed(1);
 
     console.log(

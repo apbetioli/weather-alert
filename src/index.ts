@@ -6,6 +6,7 @@ import { startDispatchWorker } from './queue/worker';
 import { startBullBoard } from './queue/dashboard';
 import { startBackgroundPoller } from './ingestion/poller';
 import { env } from './config/env';
+import { refreshUserH3Indexes } from './engine/h3-matcher';
 
 async function main() {
   console.log('🚀 Weather Alert App (MVP 3) Initializing...');
@@ -23,6 +24,8 @@ async function main() {
     process.exit(1);
   }
 
+  await refreshUserH3Indexes();
+
   // 2. Verify Redis connection
   try {
     const pong = await redis.ping();
@@ -32,16 +35,16 @@ async function main() {
     process.exit(1);
   }
 
-  // 3. Start Meteogate European Warnings Background Poller
-  startBackgroundPoller();
-
-  // 4. Initialize Telegram Bot & Asynchronous Worker
+  // 3. Initialize Telegram Bot & Asynchronous Worker
   const bot = createBot();
   if (bot) {
+    startBackgroundPoller();
     // Start BullMQ dispatch worker listening for queued alerts
     startDispatchWorker(bot);
     await startBot(bot);
   } else {
+    // Without a Telegram worker, queued notifications would accumulate and
+    // dedup state would suppress the alerts when a bot is added later.
     console.log(
       '\n💡 Headless Mode Active: You can still run automated spatial & deduplication simulations using:\n' +
         '   bun run simulate\n' +

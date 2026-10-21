@@ -16,6 +16,26 @@ export interface BenchmarkResult {
   speedupFactor: number;
 }
 
+/** Refresh persisted indexes after an H3 resolution change or deployment. */
+export async function refreshUserH3Indexes(): Promise<void> {
+  const rows = await db.execute(sql`
+    SELECT id, h3_index AS "h3Index", ST_X(location::geometry) AS lon,
+      ST_Y(location::geometry) AS lat
+    FROM user_alert_zones
+  `) as unknown as Array<{ id: number; h3Index: string; lon: number; lat: number }>;
+
+  let refreshed = 0;
+  for (const row of rows) {
+    const expectedIndex = h3.latLngToCell(Number(row.lat), Number(row.lon), env.H3_RESOLUTION);
+    if (row.h3Index === expectedIndex) continue;
+    await db.execute(sql`UPDATE user_alert_zones SET h3_index = ${expectedIndex} WHERE id = ${row.id}`);
+    refreshed++;
+  }
+  if (refreshed > 0) {
+    console.log(`⬡ [H3 Matcher] Refreshed ${refreshed} user index(es) for resolution ${env.H3_RESOLUTION}.`);
+  }
+}
+
 /**
  * Inverted H3 Spatial Matching Engine.
 /**
@@ -32,7 +52,12 @@ export function alertToH3Cells(alert: StormAlert, resolution: number = env.H3_RE
       const multiCoords = alert.polygonGeoJson.coordinates as number[][][][];
       for (const poly of multiCoords) {
         try {
-          const cells = h3.polygonToCells(poly, resolution, true);
+          const cells = h3.polygonToCellsExperimental(
+            poly,
+            resolution,
+            h3.POLYGON_TO_CELLS_FLAGS.containmentOverlapping,
+            true
+          );
           for (const c of cells) allCells.add(c);
         } catch {
           // continue with remaining polygons
@@ -40,7 +65,12 @@ export function alertToH3Cells(alert: StormAlert, resolution: number = env.H3_RE
       }
       return Array.from(allCells);
     } else {
-      return h3.polygonToCells(alert.polygonGeoJson.coordinates as number[][][], resolution, true);
+      return h3.polygonToCellsExperimental(
+        alert.polygonGeoJson.coordinates as number[][][],
+        resolution,
+        h3.POLYGON_TO_CELLS_FLAGS.containmentOverlapping,
+        true
+      );
     }
   } catch (err) {
     console.warn('⚠️ [H3 Matcher] Failed to convert polygon to H3 cells:', err);

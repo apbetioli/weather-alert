@@ -24,6 +24,7 @@ export function startBullBoard(port: number = 3000) {
 
   const server = Bun.serve({
     port,
+    hostname: '127.0.0.1',
     fetch: app.fetch,
   });
 
