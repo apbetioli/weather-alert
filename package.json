@@ -4,11 +4,12 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "bun run src/index.ts",
+    "dev": "bun run --hot src/index.ts",
     "check:db": "bun run src/db/check.ts",
     "migrate": "bun run src/db/migrate.ts",
     "simulate": "bun run src/simulator/cli.ts",
     "test:dedup": "bun run src/simulator/test-deduplication.ts",
+    "test:radar": "bun run src/simulator/test-radar.ts",
     "poll": "bun run src/simulator/test-cap-ingestion.ts"
   },
   "devDependencies": {

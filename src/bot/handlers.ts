@@ -1,4 +1,4 @@
-import { Bot, Keyboard, InlineKeyboard } from 'grammy';
+import { Bot, Keyboard } from 'grammy';
 import { sql } from 'drizzle-orm';
 import * as h3 from 'h3-js';
 import { db } from '../db';
@@ -304,10 +304,21 @@ export function registerBotHandlers(bot: Bot) {
   // 7. /resetalerts command (Clears Redis cooldown state so user can re-test from scratch)
   bot.command('resetalerts', async (ctx) => {
     const chatId = ctx.chat.id;
-    const keys = await redis.keys(`alert:state:${chatId}:*`);
-    if (keys.length > 0) {
-      await redis.del(...keys);
-      await ctx.reply(`🧹 <b>Redis alert state cleared!</b> Cooldown reset for your location.`, {
+    let cursor = '0';
+    const pattern = `alert:state:${chatId}:*`;
+    let deletedCount = 0;
+
+    do {
+      const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+      cursor = nextCursor;
+      if (keys.length > 0) {
+        await redis.del(...keys);
+        deletedCount += keys.length;
+      }
+    } while (cursor !== '0');
+
+    if (deletedCount > 0) {
+      await ctx.reply(`🧹 <b>Redis alert state cleared!</b> (${deletedCount} active cooldown(s) reset).`, {
         parse_mode: 'HTML',
       });
     } else {

@@ -118,11 +118,17 @@ async function runMeteoAlarmPoll(): Promise<PollResult> {
   };
 }
 
+export interface BackgroundPollerHandles {
+  warningTimer: NodeJS.Timeout;
+  radarTimer: NodeJS.Timeout;
+  stop: () => void;
+}
+
 /**
  * Starts the recurring authoritative warning polling service.
  * Default interval: 10 minutes (600,000 ms), aligned with MeteoAlarm publication cadence.
  */
-export function startBackgroundPoller(intervalMs: number = 10 * 60 * 1000): NodeJS.Timeout {
+export function startBackgroundPoller(intervalMs: number = 10 * 60 * 1000): BackgroundPollerHandles {
   console.log(
     `⏰ [Poller] Background MeteoAlarm Poller scheduled every ${(intervalMs / 1000 / 60).toFixed(0)} minutes.`
   );
@@ -130,7 +136,7 @@ export function startBackgroundPoller(intervalMs: number = 10 * 60 * 1000): Node
   console.log('⏰ [Poller] Background radar tracking scheduled every 5 minutes.');
 
   // Run initial poll sweep after a short delay (e.g. 5 seconds) to allow server startup
-  setTimeout(() => {
+  const startupTimer = setTimeout(() => {
     pollMeteoAlarmAlerts().catch((err) => {
       console.error('❌ [Poller] Error in initial background poll:', err);
     });
@@ -141,13 +147,13 @@ export function startBackgroundPoller(intervalMs: number = 10 * 60 * 1000): Node
     });
   }, 5000);
 
-  const timer = setInterval(() => {
+  const warningTimer = setInterval(() => {
     pollMeteoAlarmAlerts().catch((err) => {
       console.error('❌ [Poller] Error in scheduled background poll:', err);
     });
   }, intervalMs);
 
-  setInterval(() => {
+  const radarTimer = setInterval(() => {
     import('../radar').then(({ fetchLiveRadarCells }) => {
       fetchLiveRadarCells().catch((err) => {
         console.error('❌ [Poller] Error in scheduled radar tracking scan:', err);
@@ -155,5 +161,13 @@ export function startBackgroundPoller(intervalMs: number = 10 * 60 * 1000): Node
     });
   }, radarIntervalMs);
 
-  return timer;
+  return {
+    warningTimer,
+    radarTimer,
+    stop: () => {
+      clearTimeout(startupTimer);
+      clearInterval(warningTimer);
+      clearInterval(radarTimer);
+    },
+  };
 }

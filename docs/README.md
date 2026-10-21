@@ -8,14 +8,14 @@ The Severe Weather Alert System is a hyper-local, real-time alert engine designe
 
 ```mermaid
 flowchart TD
-    subgraph Phase1["Completed Phases"]
-        MVP1["MVP 1: Foundation & Dual Indexing<br/>(PostGIS Point + Uber H3 Res 7)"]
+    subgraph Phase1["Implemented Phases"]
+        MVP1["MVP 1: Foundation & Dual Indexing<br/>(PostGIS Point + Uber H3)"]
         MVP2["MVP 2: State & Deduplication<br/>(Redis Lua Gate + BullMQ Worker)"]
-        MVP3["MVP 3: Inverted H3 & Feed Ingestion<br/>(MeteoAlarm CAP + User Controls)"]
+        MVP3["MVP 3: Inverted H3 & Feed Ingestion<br/>(CAP Feed + Inverted H3 Scan)"]
+        MVP4["MVP 4: MeteoGate API & Convective Radar<br/>(Authoritative Boundaries + dBZ Radar Tracking)"]
     end
 
-    subgraph Phase2["Upcoming Phases"]
-        MVP4["MVP 4: MeteoGate API & Convective Radar<br/>(Authoritative Boundaries + dBZ Core Tracking)"]
+    subgraph Phase2["Upcoming Phase"]
         MVP5["MVP 5: Multi-Channel & Production Hardening<br/>(WhatsApp, Web Push, Quiet Hours)"]
     end
 
@@ -24,31 +24,80 @@ flowchart TD
 
 ---
 
-## MVP Index
+## MVP Index & Implementation Checklist
 
-| Document | Phase | Status | Key Deliverables |
-| :--- | :--- | :---: | :--- |
-| [MVP 1 Plan](file:///Users/alex/Code/alex/weather-alert/docs/mvp1-plan.md) | **Foundation & Dual Indexing** | ✅ Complete | Bun runtime, Docker PostGIS (`5433`), grammY bot, dual spatial representation (`Point` + H3 Res-7 `871ea5599ffffff`), PostGIS `ST_Covers` baseline. |
-| [MVP 2 Plan](file:///Users/alex/Code/alex/weather-alert/docs/mvp2-plan.md) | **Distributed State & Deduplication** | ✅ Complete | Docker Redis 7 (`6380`), atomic Lua deduplicator (`45-min cooldown`, `1.5 cm escalation delta`), BullMQ async dispatch, Bull Board (`/ui`). |
-| [MVP 3 Plan](file:///Users/alex/Code/alex/weather-alert/docs/mvp3-plan.md) | **Inverted H3 Matching & Live CAP** | ✅ Complete | MeteoAlarm Italy Atom feed ingestion, in-memory `h3.polygonToCells(coords, 7)`, sub-millisecond B-Tree spatial scan, strict geometry matching, 14 official hazard types + exact awareness colors. |
-| [MVP 4 Plan](file:///Users/alex/Code/alex/weather-alert/docs/mvp4-plan.md) | **MeteoGate API & Live Convective Radar** | 🚀 Ready to Build | EUMETNET MeteoGate API (`api.meteogate.eu`), authoritative EMMA boundary polygons from Redistribution Hub, Doppler radar composite ($\ge 50\text{ dBZ}$ hail cores), cell motion vectors, dynamic user ETA. |
-| [MVP 5 Plan](file:///Users/alex/Code/alex/weather-alert/docs/mvp5-plan.md) | **Multi-Channel & Production Hardening** | 🔮 Roadmap | WhatsApp Cloud API, Web Push, quiet hours with life-safety overrides, secure HTTPS webhooks, multi-zone monitoring. |
+### ✅ Phase 1: Foundation & Dual Spatial Indexing ([MVP 1 Plan](mvp1-plan.md))
+- [x] Bun runtime environment with native TypeScript execution and `.env` parsing
+- [x] PostgreSQL 16 + PostGIS 3.4 infrastructure via Docker Compose (`5433`)
+- [x] Drizzle ORM schema with custom `geography(Point, 4326)` mapping
+- [x] Dual spatial representation: PostGIS spherical Point + Uber H3 cell index (`h3.latLngToCell`)
+- [x] Telegram Bot onboarding via `grammY` (`/start`, `message:location`)
+- [x] Baseline spherical spatial matching (`ST_Covers`)
+- [x] Standalone spatial simulation CLI suite (`bun run simulate`)
+
+### ✅ Phase 2: Distributed State & Deduplication ([MVP 2 Plan](mvp2-plan.md))
+- [x] Redis 7 infrastructure via Docker Compose (`6380`)
+- [x] Atomic Redis Lua deduplication script (`DEDUP_LUA_SCRIPT`)
+  - [x] Initial alert dispatch (`Code 1`)
+  - [x] Escalation bypass for rising severity (`Code 2`)
+  - [x] Cooldown suppression window (`Code 0`)
+  - [x] Expiration-aware TTL management
+- [x] Failed dispatch reservation rollback (`releaseFailedAlertDispatch`)
+- [x] BullMQ asynchronous message queue (`alert-dispatch`) with exponential backoff
+- [x] Rate-limited Telegram worker (30 messages/sec)
+- [x] Bull Board real-time monitoring UI dashboard (`/ui`)
+- [x] Multi-sweep deduplication verification suite (`bun run test:dedup`)
+
+### ✅ Phase 3: Inverted H3 Spatial Engine & Feed Ingestion ([MVP 3 Plan](mvp3-plan.md))
+- [x] Inverted H3 spatial matching engine (`alertToH3Cells` + coarse-to-fine B-Tree index scan)
+- [x] 1-ring hexagon buffer (`gridDisk`) ensuring zero boundary misses and 100% PostGIS parity
+- [x] CAP alert normalization across 14 MeteoAlarm hazard types and awareness levels (Yellow, Orange, Red)
+- [x] Multi-area polygon merging for split CAP warning features (`mergeMeteoAlarmWarningAreas`)
+- [x] Universal Telegram API fallback transformer (gracefully handles HTML parse errors as plain text)
+- [x] On-demand feed query command (`/pollalerts`) & H3 benchmark command (`/testh3match`)
+- [x] Automated 10-minute authoritative warning poller with concurrency mutex
+
+### ✅ Phase 4: MeteoGate API & Live Doppler Radar Nowcasting ([MVP 4 Plan](mvp4-plan.md))
+- [x] EUMETNET MeteoGate Warnings API integration (`api.meteogate.eu/warnings`)
+- [x] Authoritative EMMA warning boundary ingestion and caching (`meteoalarm_zones`)
+- [x] Live OPERA European radar composite ingestion (`.h5` HDF5 format via `jsfive`)
+- [x] In-memory projection conversion from LAEA to WGS84 via `proj4`
+- [x] Convective core clustering ($\ge 40\text{ dBZ}$) and connected-component analysis
+- [x] Storm cell tracking across radar sweeps (displacement, velocity in km/h, compass heading)
+- [x] Radar tracking state persistence in Redis (`radar:previous_scan`) across restarts
+- [x] Hyper-local dynamic user ETA calculation (along-track / cross-track trajectory cone)
+- [x] PostGIS spatial bounding box optimization for radar user queries (`location && ST_MakeEnvelope`)
+- [x] Radar tracking simulation suite (`bun run test:radar`)
+
+### 🔮 Phase 5: Multi-Channel Delivery & Production Hardening ([MVP 5 Plan](mvp5-plan.md))
+- [ ] User-configurable alerting thresholds (minimum severity level: Yellow vs Orange vs Red)
+- [ ] Convective / Hail only filtering toggle (`/settings` or `/setlevel`)
+- [ ] Multi-zone monitoring per user (e.g. Home, Office, Vacation home)
+- [ ] Quiet hours with life-safety overrides (extreme Red alerts bypass quiet hours)
+- [ ] Multi-channel delivery adapters:
+  - [ ] WhatsApp Cloud API dispatch worker
+  - [ ] Web Push (PWA) notifications
+- [ ] Production webhook migration for Telegram bot (replacing long polling)
+- [ ] Automated unit test suite with `bun test` for pure normalization, tracking, and formatting logic
 
 ---
 
 ## System Verification Commands
 
-To verify the components built across MVPs 1–3:
+To verify the components built across MVPs 1–4:
 
 ```bash
-# Inverted H3 matching & MeteoAlarm live ingestion
+# Inverted H3 matching & MeteoGate live ingestion
 bun run poll
 
 # Multi-sweep Redis Lua deduplication & escalation test
 bun run test:dedup
 
-# PostGIS spatial simulation
+# PostGIS & H3 spatial simulation
 bun run simulate
+
+# Doppler radar cell tracking & dynamic ETA simulation
+bun run test:radar
 
 # Start development server with background poller, Bull Board, and Telegram bot
 bun run dev

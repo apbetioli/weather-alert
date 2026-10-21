@@ -1,15 +1,245 @@
-# weather-alert
+# ⛈️ Weather Alert
 
-To install dependencies:
+A high-performance, hyper-local severe weather alert engine built with **Bun**, **PostgreSQL (PostGIS)**, **Uber H3**, **Redis 7**, **BullMQ**, and **grammY**.
+
+The system monitors severe convective storms, damaging hail, and meteorological hazards across Europe by combining official civil protection bulletins (**MeteoGate / MeteoAlarm CAP 1.2**) with real-time Doppler radar nowcasting (**EUMETNET OPERA HDF5 composite**).
+
+---
+
+## 🏗️ Architecture & Pipeline Flow
+
+```mermaid
+flowchart TD
+    subgraph Ingestion["1. Ingestion Layer"]
+        A1["MeteoGate CAP Warnings<br/>(OGC-API EDR JSON)"] --> A2["Area & MultiPolygon Normalizer<br/>(mergeMeteoAlarmWarningAreas)"]
+        B1["EUMETNET OPERA Radar<br/>(ODIM HDF5 Composite)"] --> B2["jsfive Parser & proj4<br/>(LAEA ➔ WGS84 Centroids)"]
+        B2 --> B3["Storm Velocity & Motion Tracker<br/>(Heading, Speed & ETA)"]
+    end
+
+    subgraph SpatialEngine["2. Inverted H3 Spatial Engine"]
+        A2 --> C1["Warning Polygon"]
+        C1 --> C2["h3.polygonToCells(geom, Res 6)<br/>+ gridDisk(1) Buffer"]
+        C2 --> C3["PostgreSQL B-Tree Scan:<br/>WHERE h3_index IN (:impacted_cells)"]
+        C3 --> C4["Exact Verification:<br/>ST_Covers(polygon, location)"]
+        B3 --> C5["Spatial Bounding Box Scan:<br/>location && ST_MakeEnvelope(...)"]
+    end
+
+    subgraph StateAndQueue["3. Deduplication & Delivery"]
+        C4 --> D1["Redis Lua Deduplication Gate<br/>(alert:state:user:cell)"]
+        C5 --> D1
+        D1 -->|"Approved (Initial / Escalation / Cooldown Expired)"| E1["BullMQ Dispatch Queue<br/>(Rate limited: 30 jobs/sec)"]
+        D1 -->|"Suppressed (Unchanged severity within cooldown)"| E2["Drop Redundant Alert"]
+        E1 --> F1["BullMQ Worker<br/>(HTML Formatter + Parse Fallback)"]
+        F1 --> G1["Telegram Bot Delivery<br/>(grammY)"]
+    end
+```
+
+---
+
+## ⚡ Core Technical Highlights
+
+### 1. Inverted H3 Geospatial Matching Engine
+- Rather than running slow $O(N)$ spherical polygon evaluations (`ST_Covers`) against every registered coordinate in PostGIS, the app hexifies warning polygons into **Uber H3 Resolution 6 cells** (`h3.polygonToCellsExperimental(..., 6, containmentOverlapping, true)`) buffered by 1 ring (`gridDisk`).
+- It performs a sub-millisecond B-Tree index scan on `h3_index` in PostgreSQL, followed by exact geometric verification (`ST_Covers`) solely on the filtered candidate locations. This achieves **100% spatial parity** with PostGIS spherical math at **1.8x – 5x faster speed**.
+
+### 2. Live Doppler Radar & Storm Cell Nowcasting
+- Direct in-memory parsing of European OPERA radar composites (`.h5` HDF5 format) via `jsfive` and projection from LAEA to WGS84 using `proj4`.
+- Connected-component clustering isolates high-reflectivity convective cores ($\ge 40\text{ dBZ}$) and tracks cell displacement across consecutive sweeps to derive storm travel speed ($\text{km/h}$) and compass heading ($\text{bearing}^\circ$).
+- Computes a dynamic user ETA (in minutes) based on an along-track / cross-track trajectory cone.
+- Velocity tracking state is persisted in Redis (`radar:previous_scan`), making nowcasting resilient across application restarts.
+
+### 3. Atomic Redis Lua Deduplication Gate
+- An atomic Lua script in Redis prevents notification fatigue:
+  - **Initial Alert:** Sent immediately on first detection.
+  - **Severity Escalation:** Bypasses cooldowns immediately if hazard severity rank increases (e.g., Orange $\rightarrow$ Red or hail core surges).
+  - **Cooldown Suppression:** Repeat alerts with identical severity are suppressed for 24 hours (or until warning expiry).
+  - **Failure Rollback:** If BullMQ job retries are exhausted or queueing fails, the reservation is rolled back atomically via `releaseFailedAlertDispatch`.
+
+### 4. Resilient Telegram Delivery & Universal Fallback
+- Alerts are formatted with official MeteoAlarm awareness color badges (🟡 Yellow, 🟠 Orange, 🔴 Red) and hazard symbols.
+- A custom grammY transformer intercepts Telegram `400: can't parse entities` errors and retries the message as sanitized plain text, guaranteeing life-safety alerts are never dropped due to malformed upstream tags.
+- Rate-limited to 30 messages/sec in BullMQ to adhere to Telegram API broadcast guidelines.
+
+---
+
+## 📋 Requirements
+
+- [Bun](https://bun.sh) (v1.2+)
+- [Docker](https://www.docker.com/) & Docker Compose
+- Telegram Bot Token from [@BotFather](https://t.me/BotFather)
+- MeteoGate API Key (from [api.meteogate.eu](https://api.meteogate.eu))
+
+---
+
+## 🚀 Quick Start
+
+### 1. Clone & Install Dependencies
 
 ```bash
 bun install
+cp .env.example .env
 ```
 
-To run:
+### 2. Configure Environment Variables
+
+Edit `.env` and fill in your keys:
+
+```ini
+DATABASE_URL=postgresql://postgres:postgres@localhost:5433/weather_alert
+REDIS_URL=redis://localhost:6380
+TELEGRAM_BOT_TOKEN=your_telegram_bot_token_here
+METEOGATE_API_KEY=your_meteogate_api_key_here
+PORT=3000
+HOST=0.0.0.0
+H3_RESOLUTION=6
+```
+
+### 3. Start Infrastructure (PostGIS & Redis)
 
 ```bash
-bun run index.ts
+docker compose up -d
 ```
 
-This project was created using `bun init` in bun v1.2.11. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.
+### 4. Run Migrations & Start Development Server
+
+```bash
+bun run migrate
+bun run dev
+```
+
+The app will:
+1. Verify PostGIS connection and ensure H3 indexes are synchronized.
+2. Verify Redis connection.
+3. Start the Bull Board monitoring dashboard on `http://localhost:3000/ui`.
+4. Start the Telegram Bot via long polling.
+5. Launch background pollers: MeteoGate warnings every 10 minutes, radar tracking every 5 minutes.
+
+> 💡 **Headless Mode:** If `TELEGRAM_BOT_TOKEN` is left empty, the app runs in headless mode. You can still run simulations and tests without Telegram.
+
+---
+
+## ⚙️ Configuration Reference
+
+| Variable | Default | Description |
+| :--- | :--- | :--- |
+| `DATABASE_URL` | `postgresql://postgres:postgres@localhost:5433/weather_alert` | PostgreSQL + PostGIS connection string |
+| `REDIS_URL` | `redis://localhost:6380` | Redis connection for BullMQ and deduplication |
+| `TELEGRAM_BOT_TOKEN` | `""` | Telegram bot token from @BotFather |
+| `METEOGATE_API_KEY` | `""` | API key for MeteoGate EDR & Radar services |
+| `METEOGATE_API_URL` | `https://api.meteogate.eu/warnings` | Base URL for MeteoGate warnings endpoint |
+| `METEOGATE_LOCATION` | `ALL` | Ingestion scope (`ALL` or country code e.g. `IT`, `FR`, `DE`) |
+| `H3_RESOLUTION` | `6` | Uber H3 hexagon resolution (0–15, default 6 $\approx 36\text{ km}^2$) |
+| `PORT` | `3000` | HTTP port for Bull Board dashboard |
+| `HOST` | `0.0.0.0` | Binding host for Bull Board server |
+| `DASHBOARD_USERNAME`| `admin` | Optional HTTP Basic Auth username for `/ui` |
+| `DASHBOARD_PASSWORD`| `""` | Optional HTTP Basic Auth password (auth disabled if empty) |
+
+---
+
+## 🤖 Telegram Bot Commands
+
+| Command | Description |
+| :--- | :--- |
+| `/start` | Welcome prompt with interactive "Share Location" button |
+| `/status` | View your monitored coordinates and Uber H3 cell index |
+| `/setname <Name>` | Rename your location label (e.g. `/setname Home`) |
+| `/pollalerts` | Query the live official MeteoGate warning feed on-demand |
+| `/testh3match` | Run a side-by-side benchmark: Inverted H3 vs PostGIS `ST_Covers` |
+| `/testalert` | Simulate an incoming storm cell over your coordinates |
+| `/testescalate` | Simulate a rapid severity escalation (surge to Red alert) |
+| `/resetalerts` | Reset your Redis cooldown window for fresh testing |
+| `/help` | Complete service guide and awareness level explanations |
+
+---
+
+## 🧪 Simulation & Test Suites
+
+You can test every component independently without waiting for live severe weather:
+
+```bash
+# 1. PostGIS & Uber H3 spatial matching simulation
+bun run simulate
+
+# 2. Redis Lua 4-sweep deduplication and escalation test
+bun run test:dedup
+
+# 3. Live MeteoGate CAP warning ingestion & H3 parity verification
+bun run poll
+
+# 4. Doppler radar cell tracking & user ETA calculation simulation
+bun run test:radar
+
+# 5. Database health check
+bun run check:db
+```
+
+---
+
+## 📊 Real-Time Queue Dashboard
+
+A live **Bull Board** interface is available at:
+👉 **`http://localhost:3000/ui`**
+
+Features:
+- Live inspection of `alert-dispatch` queue (active, completed, failed, waiting).
+- Full payload inspection (storm alert attributes, user coordinates, deduplication reason).
+- Worker throughput, retry counts, and latency monitoring.
+- Protected by optional HTTP Basic Auth (`DASHBOARD_PASSWORD`).
+
+---
+
+## 🗺️ Roadmap & Implementation Checklist
+
+### ✅ Phase 1: Foundation & Dual Spatial Indexing ([MVP 1](docs/mvp1-plan.md))
+- [x] Bun runtime environment with native TypeScript execution and `.env` parsing
+- [x] PostgreSQL 16 + PostGIS 3.4 infrastructure via Docker Compose
+- [x] Drizzle ORM schema with custom `geography(Point, 4326)` mapping
+- [x] Dual spatial representation: PostGIS spherical Point + Uber H3 cell index (`h3.latLngToCell`)
+- [x] Telegram Bot onboarding via `grammY` (`/start`, `message:location`)
+- [x] Baseline spherical spatial matching (`ST_Covers`)
+- [x] Standalone spatial simulation CLI suite (`bun run simulate`)
+
+### ✅ Phase 2: Distributed State & Deduplication ([MVP 2](docs/mvp2-plan.md))
+- [x] Redis 7 infrastructure via Docker Compose
+- [x] Atomic Redis Lua deduplication script (`DEDUP_LUA_SCRIPT`)
+  - [x] Initial alert dispatch (`Code 1`)
+  - [x] Escalation bypass for rising severity (`Code 2`)
+  - [x] Cooldown suppression window (`Code 0`)
+  - [x] Expiration-aware TTL management
+- [x] Failed dispatch reservation rollback (`releaseFailedAlertDispatch`)
+- [x] BullMQ asynchronous message queue (`alert-dispatch`) with exponential backoff
+- [x] Rate-limited Telegram worker (30 messages/sec)
+- [x] Bull Board real-time monitoring UI dashboard (`/ui`)
+- [x] Multi-sweep deduplication verification suite (`bun run test:dedup`)
+
+### ✅ Phase 3: Inverted H3 Spatial Engine & Feed Ingestion ([MVP 3](docs/mvp3-plan.md))
+- [x] Inverted H3 spatial matching engine (`alertToH3Cells` + coarse-to-fine B-Tree index scan)
+- [x] 1-ring hexagon buffer (`gridDisk`) ensuring zero boundary misses and 100% PostGIS parity
+- [x] CAP alert normalization across 14 MeteoAlarm hazard types and awareness levels (Yellow, Orange, Red)
+- [x] Multi-area polygon merging for split CAP warning features (`mergeMeteoAlarmWarningAreas`)
+- [x] Universal Telegram API fallback transformer (gracefully handles HTML parse errors as plain text)
+- [x] On-demand feed query command (`/pollalerts`) & H3 benchmark command (`/testh3match`)
+- [x] Automated 10-minute authoritative warning poller with concurrency mutex
+
+### ✅ Phase 4: MeteoGate API & Live Doppler Radar Nowcasting ([MVP 4](docs/mvp4-plan.md))
+- [x] EUMETNET MeteoGate Warnings API integration (`api.meteogate.eu/warnings`)
+- [x] Authoritative EMMA warning boundary ingestion and caching (`meteoalarm_zones`)
+- [x] Live OPERA European radar composite ingestion (`.h5` HDF5 format via `jsfive`)
+- [x] In-memory projection conversion from LAEA to WGS84 via `proj4`
+- [x] Convective core clustering ($\ge 40\text{ dBZ}$) and connected-component analysis
+- [x] Storm cell tracking across radar sweeps (displacement, velocity in km/h, compass heading)
+- [x] Radar tracking state persistence in Redis (`radar:previous_scan`) across restarts
+- [x] Hyper-local dynamic user ETA calculation (along-track / cross-track trajectory cone)
+- [x] PostGIS spatial bounding box optimization for radar user queries (`location && ST_MakeEnvelope`)
+- [x] Radar tracking simulation suite (`bun run test:radar`)
+
+### 🔮 Phase 5: Multi-Channel Delivery & Production Hardening ([MVP 5](docs/mvp5-plan.md))
+- [ ] User-configurable alerting thresholds (minimum severity level: Yellow vs Orange vs Red)
+- [ ] Convective / Hail only filtering toggle (`/settings` or `/setlevel`)
+- [ ] Multi-zone monitoring per user (e.g. Home, Office, Vacation home)
+- [ ] Quiet hours with life-safety overrides (extreme Red alerts bypass quiet hours)
+- [ ] Multi-channel delivery adapters:
+  - [ ] WhatsApp Cloud API dispatch worker
+  - [ ] Web Push (PWA) notifications
+- [ ] Production webhook migration for Telegram bot (replacing long polling)
+- [ ] Automated unit test suite with `bun test` for pure normalization, tracking, and formatting logic

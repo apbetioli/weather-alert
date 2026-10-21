@@ -1,18 +1,19 @@
 import { sql } from 'drizzle-orm';
-import { db } from './db';
+import { db, queryClient } from './db';
 import { redis } from './redis/client';
 import { createBot, startBot } from './bot';
 import { startDispatchWorker } from './queue/worker';
 import { startBullBoard } from './queue/dashboard';
+import { alertDispatchQueue } from './queue';
 import { startBackgroundPoller } from './ingestion/poller';
 import { env } from './config/env';
 import { refreshUserH3Indexes } from './engine/h3-matcher';
 
 async function main() {
-  console.log('🚀 Weather Alert App (MVP 3) Initializing...');
+  console.log('🚀 Weather Alert App Initializing...');
 
   // Start Bull Board UI Dashboard
-  startBullBoard(env.PORT || 3000);
+  const server = startBullBoard(env.PORT || 3000);
 
   // 1. Verify PostGIS connection
   try {
@@ -37,10 +38,13 @@ async function main() {
 
   // 3. Initialize Telegram Bot & Asynchronous Worker
   const bot = createBot();
+  let pollerHandles: ReturnType<typeof startBackgroundPoller> | undefined;
+  let worker: ReturnType<typeof startDispatchWorker> | undefined;
+
   if (bot) {
-    startBackgroundPoller();
+    pollerHandles = startBackgroundPoller();
     // Start BullMQ dispatch worker listening for queued alerts
-    startDispatchWorker(bot);
+    worker = startDispatchWorker(bot);
     await startBot(bot);
   } else {
     // Without a Telegram worker, queued notifications would accumulate and
@@ -49,9 +53,44 @@ async function main() {
       '\n💡 Headless Mode Active: You can still run automated spatial & deduplication simulations using:\n' +
         '   bun run simulate\n' +
         '   bun run test:dedup\n' +
-        '   bun run poll\n'
+        '   bun run poll\n' +
+        '   bun run test:radar\n'
     );
   }
+
+  // Graceful shutdown handling
+  let isShuttingDown = false;
+  const shutdown = async (signal: string) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`\n🛑 Received ${signal}. Starting graceful shutdown...`);
+
+    try {
+      pollerHandles?.stop();
+      console.log('⏹️  Background pollers stopped.');
+
+      if (bot) {
+        bot.stop();
+        console.log('⏹️  Telegram bot stopped.');
+      }
+      if (worker) {
+        await worker.close();
+        console.log('⏹️  BullMQ worker closed.');
+      }
+      await alertDispatchQueue.close();
+      await redis.quit();
+      await queryClient.end();
+      server.stop();
+      console.log('✅ Connections closed cleanly. Shutdown complete.');
+      process.exit(0);
+    } catch (err) {
+      console.error('❌ Error during graceful shutdown:', err);
+      process.exit(1);
+    }
+  };
+
+  process.on('SIGINT', () => shutdown('SIGINT'));
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
 }
 
 main().catch((err) => {
