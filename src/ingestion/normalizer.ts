@@ -1,6 +1,58 @@
 import type { StormAlert, AlertColor, HazardType } from '../engine/types';
 import type { RawMeteoAlarmAlert, ParsedAwarenessLevel, ParsedAwarenessType } from './types';
 
+/**
+ * MeteoGate can return one feature per area for a single CAP warning. Combine
+ * those polygons by CAP identifier so each warning is spatially matched once.
+ */
+export function mergeMeteoAlarmWarningAreas(
+  alerts: RawMeteoAlarmAlert[]
+): RawMeteoAlarmAlert[] {
+  const groups = new Map<
+    string,
+    {
+      alert: RawMeteoAlarmAlert;
+      polygons: number[][][][];
+      polygonKeys: Set<string>;
+      areaDescriptions: Set<string>;
+    }
+  >();
+
+  for (const alert of alerts) {
+    let group = groups.get(alert.identifier);
+    if (!group) {
+      group = {
+        alert,
+        polygons: [],
+        polygonKeys: new Set(),
+        areaDescriptions: new Set(),
+      };
+      groups.set(alert.identifier, group);
+    }
+
+    if (alert.areaDesc) group.areaDescriptions.add(alert.areaDesc);
+    if (!alert.polygonCoords?.length) continue;
+
+    const polygons = alert.polygonType === 'MultiPolygon'
+      ? alert.polygonCoords as number[][][][]
+      : [alert.polygonCoords as number[][][]];
+
+    for (const polygon of polygons) {
+      const key = JSON.stringify(polygon);
+      if (group.polygonKeys.has(key)) continue;
+      group.polygonKeys.add(key);
+      group.polygons.push(polygon);
+    }
+  }
+
+  return Array.from(groups.values(), ({ alert, polygons, areaDescriptions }) => ({
+    ...alert,
+    areaDesc: Array.from(areaDescriptions).join(', ') || alert.areaDesc,
+    polygonCoords: polygons.length > 0 ? polygons : alert.polygonCoords,
+    polygonType: polygons.length > 0 ? 'MultiPolygon' : alert.polygonType,
+  }));
+}
+
 export const AWARENESS_CODE_TO_HAZARD: Record<number, HazardType> = {
   1: 'WIND',
   2: 'SNOW_ICE',
@@ -45,10 +97,10 @@ export function mapAlertColor(
 
   const text = `${rawSeverity || ''} ${rawEvent || ''}`.toLowerCase();
 
-  if (text.includes('extreme') || text.includes('rossa') || text.includes('red')) {
+  if (/\bextreme\b|\bross[aoe]\b|\bred\b/.test(text)) {
     return { color: 'RED', colorName: 'RED', severity: 'EMERGENCY' };
   }
-  if (text.includes('severe') || text.includes('arancione') || text.includes('orange')) {
+  if (/\bsevere\b|\barancione\b|\borange\b/.test(text)) {
     return { color: 'ORANGE', colorName: 'ORANGE', severity: 'WARNING' };
   }
   return { color: 'YELLOW', colorName: 'YELLOW', severity: 'WATCH' };
@@ -67,13 +119,13 @@ export function detectHazardType(
 ): HazardType {
   const combined = `${event} ${headline || ''} ${description || ''}`.toLowerCase();
 
-  // Hail takes precedence for convective precision
-  if (combined.includes('hail') || combined.includes('grandine')) return 'HAIL';
-
   // Use structured MeteoAlarm awareness type if available
   if (awarenessType?.typeCode && AWARENESS_CODE_TO_HAZARD[awarenessType.typeCode]) {
     return AWARENESS_CODE_TO_HAZARD[awarenessType.typeCode]!;
   }
+
+  // Hail takes precedence over text-based inference for convective precision.
+  if (/\bhail\b|\bgrandine\b/.test(combined)) return 'HAIL';
 
   if (combined.includes('thunderstorm') || combined.includes('temporali') || combined.includes('temporale')) {
     return 'THUNDERSTORM';
@@ -87,19 +139,19 @@ export function detectHazardType(
   if (combined.includes('rain') || combined.includes('pioggia') || combined.includes('piogge')) {
     return 'RAIN';
   }
-  if (combined.includes('wind') || combined.includes('vento') || combined.includes('raffiche') || combined.includes('gust')) {
+  if (/\bwind\b|\bvento\b|\braffiche\b|\bgusts?\b/.test(combined)) {
     return 'WIND';
   }
   if (
     combined.includes('snow') ||
     combined.includes('neve') ||
-    combined.includes('ice') ||
+    /\bice\b/.test(combined) ||
     combined.includes('ghiaccio') ||
     combined.includes('gelicidio')
   ) {
     return 'SNOW_ICE';
   }
-  if (combined.includes('fog') || combined.includes('nebbia')) {
+  if (/\bfog\b|\bnebbia\b/.test(combined)) {
     return 'FOG';
   }
   if (

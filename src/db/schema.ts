@@ -8,6 +8,12 @@ export const geographyPoint = customType<{ data: string; driverData: string }>({
   },
 });
 
+export const geometryMultiPolygon = customType<{ data: string; driverData: string }>({
+  dataType() {
+    return 'geometry(MultiPolygon, 4326)';
+  },
+});
+
 export const userAlertZones = pgTable(
   'user_alert_zones',
   {
@@ -35,3 +41,17 @@ export const userAlertZones = pgTable(
 
 export type UserAlertZone = typeof userAlertZones.$inferSelect;
 export type NewUserAlertZone = typeof userAlertZones.$inferInsert;
+
+export const meteoalarmZones = pgTable('meteoalarm_zones', {
+  id: serial('id').primaryKey(),
+  emmaId: varchar('emma_id', { length: 32 }).notNull().unique(),
+  countryCode: varchar('country_code', { length: 4 }).notNull(),
+  name: varchar('name', { length: 255 }).notNull(),
+  geometry: geometryMultiPolygon('geometry').notNull(),
+  createdAt: timestamp('created_at').defaultNow().notNull(),
+}, (table) => [
+  index('idx_meteoalarm_zones_geom').using('gist', table.geometry)
+]);
+
+export type MeteoalarmZone = typeof meteoalarmZones.$inferSelect;
+export type NewMeteoalarmZone = typeof meteoalarmZones.$inferInsert;

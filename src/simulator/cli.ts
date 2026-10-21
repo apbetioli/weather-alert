@@ -13,12 +13,13 @@ async function runCliSimulation() {
   const testLat = 45.438;
   const testLon = 12.235;
   const testH3 = h3.latLngToCell(testLat, testLon, env.H3_RESOLUTION);
-  const testChatId = 999999999;
+  const testChatId = 900000000 + Math.floor(Math.random() * 99999999);
 
   console.log(`📍 Step 1: Seeding test alert location...`);
   console.log(`   - Coordinates: (${testLat}, ${testLon})`);
   console.log(`   - Uber H3 Res-${env.H3_RESOLUTION}: ${testH3}`);
 
+  try {
   await db.execute(sql`
     INSERT INTO user_alert_zones (
       telegram_chat_id,
@@ -53,7 +54,7 @@ async function runCliSimulation() {
     console.log('---------------------------------------\n');
   } else {
     console.error('❌ Expected spatial match, but found none!');
-    process.exit(1);
+    throw new Error('Expected spatial match, but found none');
   }
 
   // Test Case B: Distant Storm over Rome (~400 km south)
@@ -65,11 +66,13 @@ async function runCliSimulation() {
     console.log('✅ SPATIAL EXCLUSION CONFIRMED: 0 users matched outside storm perimeter as expected.');
   } else {
     console.error('❌ Unexpected match outside storm perimeter!');
-    process.exit(1);
+    throw new Error('Unexpected match outside storm perimeter');
   }
 
   console.log('\n🎉 ALL POSTGIS & H3 SPATIAL TESTS PASSED SUCCESSFULLY!');
-  process.exit(0);
+  } finally {
+    await db.execute(sql`DELETE FROM user_alert_zones WHERE telegram_chat_id = ${testChatId}`);
+  }
 }
 
 runCliSimulation().catch((err) => {

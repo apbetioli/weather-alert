@@ -5,6 +5,7 @@ import {
   METEOALARM_HAZARDS,
 } from '../engine/types';
 import { env } from '../config/env';
+import type { RadarApproachNotice } from '../queue';
 
 /**
  * Escapes reserved characters for Telegram HTML mode:
@@ -18,6 +19,18 @@ export function escapeHtml(text: string | number): string {
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
+}
+
+function escapeHtmlWithinLimit(value: string | number, maxLength: number): string {
+  const input = String(value);
+  let output = '';
+  for (const char of input) {
+    const escaped = escapeHtml(char);
+    if (output.length + escaped.length > maxLength) break;
+    output += escaped;
+  }
+  if (output.length < escapeHtml(input).length && output.length + 3 <= maxLength) output += '...';
+  return output;
 }
 
 /**
@@ -35,26 +48,39 @@ export function formatDateTime(iso?: string): string {
   if (!iso) return 'N/A';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return 'N/A';
-  const day = String(d.getDate()).padStart(2, '0');
-  const month = String(d.getMonth() + 1).padStart(2, '0');
-  const year = d.getFullYear();
-  const hours = String(d.getHours()).padStart(2, '0');
-  const minutes = String(d.getMinutes()).padStart(2, '0');
-  return `${day}/${month}/${year} ${hours}:${minutes}`;
+  const parts = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'UTC',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(d);
+  const part = (type: string) => parts.find((p) => p.type === type)?.value || '';
+  return `${part('day')}/${part('month')}/${part('year')} ${part('hour')}:${part('minute')} UTC`;
 }
 
 export function formatDateWindow(onsetIso?: string, expiresIso?: string): string {
-  return `${formatDateTime(onsetIso)} → ${formatDateTime(expiresIso)}`;
+  if (onsetIso && expiresIso) return `${formatDateTime(onsetIso)} → ${formatDateTime(expiresIso)}`;
+  if (onsetIso) return `from ${formatDateTime(onsetIso)}`;
+  if (expiresIso) return `until ${formatDateTime(expiresIso)}`;
+  return 'N/A';
 }
 
 /**
  * Formats a weather alert into a safe, bulletproof Telegram HTML message
  * using the official color code (🟡 Gialla, 🟠 Arancione, 🔴 Rossa) and MeteoAlarm symbols.
  */
-export function formatAlertHtml(alert: StormAlert, user: MatchedUser, reason?: string): string {
-  const escapedLocation = escapeHtml(user.locationName);
+export function formatAlertHtml(
+  alert: Omit<StormAlert, 'polygonGeoJson'>,
+  user: MatchedUser,
+  reason?: string
+): string {
+  const escapedLocation = escapeHtmlWithinLimit(user.locationName, 400);
   const escapedH3 = escapeHtml(user.h3Index);
-  const escapedInstruction = escapeHtml(alert.instruction);
+  const escapedInstruction = escapeHtmlWithinLimit(alert.instruction, 1300);
+  const escapedEvent = escapeHtmlWithinLimit(alert.event, 500);
 
   // Determine official color badge and name
   const color = alert.color || (alert.severity === 'EMERGENCY' ? 'RED' : alert.severity === 'WARNING' ? 'ORANGE' : 'YELLOW');
@@ -76,7 +102,7 @@ export function formatAlertHtml(alert: StormAlert, user: MatchedUser, reason?: s
 
   const metricsSection =
     `• <b>Hazard:</b> ${hazardMeta.symbol} ${escapeHtml(hazardMeta.nameEn)}\n` +
-    (alert.description ? `• <b>Details:</b> <i>${escapeHtml(alert.description.slice(0, 180))}...</i>\n` : '');
+    (alert.description ? `• <b>Details:</b> <i>${escapeHtmlWithinLimit(alert.description, 700)}</i>\n` : '');
 
   const guidanceSection = awareness
     ? `ℹ️ <b>Official Level:</b> ${escapeHtml(awareness.summary)}\n\n`
@@ -84,7 +110,7 @@ export function formatAlertHtml(alert: StormAlert, user: MatchedUser, reason?: s
 
   return (
     escalationBadge +
-    `${colorBadge} <b>${colorName}: ${hazardMeta.symbol} ${escapeHtml(alert.event)}</b>\n\n` +
+    `${colorBadge} <b>${colorName}: ${hazardMeta.symbol} ${escapedEvent}</b>\n\n` +
     `📍 <b>Monitored Area:</b> ${escapedLocation}\n\n` +
     validitySection +
     metricsSection +
@@ -95,3 +121,12 @@ export function formatAlertHtml(alert: StormAlert, user: MatchedUser, reason?: s
   );
 }
 
+export function formatRadarApproachHtml(notice: RadarApproachNotice, user: MatchedUser): string {
+  return (
+    `📡 <b>Radar echo approaching your monitored location</b>\n\n` +
+    `📍 <b>Location:</b> ${escapeHtml(user.locationName)}\n` +
+    `⏱️ <b>Estimated closest approach:</b> about ${notice.etaMinutes} minutes\n` +
+    `💨 <b>Recent estimated motion:</b> ${notice.speedKmh.toFixed(0)} km/h\n\n` +
+    `<i>This estimate is based on movement between radar scans. It is informational, not an official weather warning. For hazard severity and safety advice, follow MeteoAlarm and your national weather service.</i>`
+  );
+}

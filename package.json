@@ -14,7 +14,10 @@
   "devDependencies": {
     "@types/bun": "latest",
     "@types/ioredis": "^5.0.0",
-    "drizzle-kit": "^0.31.11"
+    "@types/proj4": "^2.19.0",
+    "drizzle-kit": "^0.31.11",
+    "jsfive": "^0.4.2",
+    "proj4": "^2.22.0"
   },
   "peerDependencies": {
     "typescript": "^5"
