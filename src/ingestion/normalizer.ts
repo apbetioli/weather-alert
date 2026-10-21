@@ -53,7 +53,7 @@ export function mergeMeteoAlarmWarningAreas(
   }));
 }
 
-export const AWARENESS_CODE_TO_HAZARD: Record<number, HazardType> = {
+const AWARENESS_CODE_TO_HAZARD: Record<number, HazardType> = {
   1: 'WIND',
   2: 'SNOW_ICE',
   3: 'THUNDERSTORM',
@@ -76,7 +76,7 @@ export const AWARENESS_CODE_TO_HAZARD: Record<number, HazardType> = {
  * Level 3 / Severe / Orange   -> ORANGE (Allerta Arancione)
  * Level 4 / Extreme / Red     -> RED (Allerta Rossa)
  */
-export function mapAlertColor(
+function mapAlertColor(
   rawSeverity?: string,
   rawEvent?: string,
   awarenessLevel?: ParsedAwarenessLevel
@@ -111,7 +111,7 @@ export function mapAlertColor(
  * or CAP event name and description.
  * Covers all 14 official MeteoAlarm hazard types plus HAIL.
  */
-export function detectHazardType(
+function detectHazardType(
   event: string,
   headline?: string,
   description?: string,
@@ -199,31 +199,10 @@ export function detectHazardType(
 }
 
 /**
- * Calculates estimated arrival time (in minutes) based on effective/onset dates.
- * Returns 0 if warning is currently active.
- */
-export function calculateEtaMinutes(effectiveIso?: string, onsetIso?: string): number {
-  const targetTimeStr = onsetIso || effectiveIso;
-  if (!targetTimeStr) return 0;
-
-  const targetTime = new Date(targetTimeStr).getTime();
-  const now = Date.now();
-  const diffMinutes = Math.round((targetTime - now) / (60 * 1000));
-
-  // If warning is already active or in the past, return 0 (currently active)
-  if (diffMinutes <= 0 || isNaN(diffMinutes)) {
-    return 0;
-  }
-
-  // Cap between 5 and 720 minutes for forward alerts
-  return Math.min(Math.max(diffMinutes, 5), 720);
-}
-
-/**
  * Formats user safety instructions, incorporating official CAP instructions or sensible defaults
  * based on MeteoAlarm official awareness guidance and hazard characteristics.
  */
-export function formatSafetyInstructions(raw: RawMeteoAlarmAlert, hazardType: HazardType, color: AlertColor): string {
+function formatSafetyInstructions(raw: RawMeteoAlarmAlert, hazardType: HazardType): string {
   if (raw.instruction && raw.instruction.trim().length > 10) {
     return raw.instruction.trim();
   }
@@ -299,8 +278,7 @@ export function normalizeMeteoAlarmAlert(raw: RawMeteoAlarmAlert): StormAlert {
   const hazardType = detectHazardType(raw.event, raw.headline, raw.description, raw.awarenessType);
   const severityRank = color === 'RED' ? 3 : color === 'ORANGE' ? 2 : 1;
 
-  const etaMinutes = calculateEtaMinutes(raw.effective, raw.onset);
-  const instruction = formatSafetyInstructions(raw, hazardType, color);
+  const instruction = formatSafetyInstructions(raw, hazardType);
 
   // Sanitize cell identifier for Redis keys and BullMQ job uniqueness
   const safeIdentifier = raw.identifier.replace(/[^a-zA-Z0-9_.-]/g, '_');

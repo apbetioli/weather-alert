@@ -4,7 +4,7 @@ import type { StormAlert } from '../engine/types';
  * Creates a synthetic polygon (8-sided approximation) around a center point with a given radius in km.
  * Note: GeoJSON coordinates are in [longitude, latitude] order!
  */
-export function generateStormPolygon(centerLat: number, centerLon: number, radiusKm: number = 8): {
+function generateStormPolygon(centerLat: number, centerLon: number, radiusKm: number = 8): {
   type: 'Polygon';
   coordinates: number[][][];
 } {

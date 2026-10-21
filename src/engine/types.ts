@@ -18,34 +18,6 @@ export type HazardType =
   | 'DROUGHT'
   | 'OTHER';
 
-export interface AwarenessLevelInfo {
-  color: AlertColor;
-  name: string;
-  summary: string;
-  advice: string;
-}
-
-export const METEOALARM_AWARENESS_LEVELS: Record<AlertColor, AwarenessLevelInfo> = {
-  YELLOW: {
-    color: 'YELLOW',
-    name: 'Yellow | Moderate',
-    summary: 'The weather is potentially dangerous.',
-    advice: 'The expected phenomena are not unusual, but pay attention if exposed to outdoor activities. Keep yourself informed.',
-  },
-  ORANGE: {
-    color: 'ORANGE',
-    name: 'Orange | Severe',
-    summary: 'The weather is dangerous.',
-    advice: 'Unusual phenomena are expected. Damage is probable. Maximum vigilance and follow the instructions of the authorities.',
-  },
-  RED: {
-    color: 'RED',
-    name: 'Red | Extreme',
-    summary: 'The weather is very dangerous.',
-    advice: 'Phenomena of exceptional intensity are expected. Serious damage and threat to safety. Strictly follow the authorities\' orders.',
-  },
-};
-
 export interface HazardMetadata {
   type: HazardType;
   symbol: string;

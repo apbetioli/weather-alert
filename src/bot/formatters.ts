@@ -33,17 +33,9 @@ function escapeHtmlWithinLimit(value: string | number, maxLength: number): strin
 }
 
 /**
- * Escapes reserved MarkdownV2 characters in Telegram:
- * \ _ * [ ] ( ) ~ ` > # + - = | { } . !
- */
-export function escapeMarkdownV2(text: string | number): string {
-  return String(text).replace(/[\\[\]()~>#+=|{}.!_*`\\-]/g, '\\$&');
-}
-
-/**
  * Formats ISO timestamp unambiguously into European DD/MM/YYYY HH:mm format.
  */
-export function formatDateTime(iso?: string): string {
+function formatDateTime(iso?: string): string {
   if (!iso) return 'N/A';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return 'N/A';
@@ -60,7 +52,7 @@ export function formatDateTime(iso?: string): string {
   return `${part('day')}/${part('month')}/${part('year')} ${part('hour')}:${part('minute')} UTC`;
 }
 
-export function formatDateWindow(onsetIso?: string, expiresIso?: string): string {
+function formatDateWindow(onsetIso?: string, expiresIso?: string): string {
   if (onsetIso && expiresIso) return `${formatDateTime(onsetIso)} → ${formatDateTime(expiresIso)}`;
   if (onsetIso) return `from ${formatDateTime(onsetIso)}`;
   if (expiresIso) return `until ${formatDateTime(expiresIso)}`;

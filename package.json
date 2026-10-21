@@ -14,7 +14,6 @@
   },
   "devDependencies": {
     "@types/bun": "latest",
-    "@types/ioredis": "^5.0.0",
     "@types/proj4": "^2.19.0",
     "drizzle-kit": "^0.31.11",
     "jsfive": "^0.4.2",
@@ -26,7 +25,6 @@
   "dependencies": {
     "@bull-board/api": "^9.10.2",
     "@bull-board/hono": "^9.10.2",
-    "@grammyjs/parse-mode": "^2.3.0",
     "@hono/bun": "^1.0.0",
     "bullmq": "^6.3.11",
     "drizzle-orm": "^0.45.3",
