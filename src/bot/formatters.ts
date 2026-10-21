@@ -1,7 +1,6 @@
 import {
   type StormAlert,
   type MatchedUser,
-  METEOALARM_AWARENESS_LEVELS,
   METEOALARM_HAZARDS,
 } from '../engine/types';
 import { env } from '../config/env';
@@ -88,8 +87,6 @@ export function formatAlertHtml(
   const colorName = color === 'RED' ? 'RED ALERT' : color === 'ORANGE' ? 'ORANGE ALERT' : 'YELLOW ALERT';
 
   const hazardMeta = METEOALARM_HAZARDS[alert.hazardType] || METEOALARM_HAZARDS.OTHER;
-  const awareness = METEOALARM_AWARENESS_LEVELS[color];
-
   const escalationBadge =
     reason === 'ESCALATION'
       ? `🔺 <b>ESCALATION: ALERT SEVERITY INCREASED TO ${colorName}!</b> 🔺\n\n`
@@ -104,10 +101,6 @@ export function formatAlertHtml(
     `• <b>Hazard:</b> ${hazardMeta.symbol} ${escapeHtml(hazardMeta.nameEn)}\n` +
     (alert.description ? `• <b>Details:</b> <i>${escapeHtmlWithinLimit(alert.description, 700)}</i>\n` : '');
 
-  const guidanceSection = awareness
-    ? `ℹ️ <b>Official Level:</b> ${escapeHtml(awareness.summary)}\n\n`
-    : '\n';
-
   return (
     escalationBadge +
     `${colorBadge} <b>${colorName}: ${hazardMeta.symbol} ${escapedEvent}</b>\n\n` +
@@ -115,7 +108,6 @@ export function formatAlertHtml(
     validitySection +
     metricsSection +
     `• <b>Spatial Index (H3 Res ${env.H3_RESOLUTION}):</b> <code>${escapedH3}</code>\n\n` +
-    guidanceSection +
     `🛡️ <b>Recommended Actions:</b>\n` +
     `${escapedInstruction}`
   );
