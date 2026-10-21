@@ -290,6 +290,10 @@ export async function fetchMeteogateWarnings(
       return [];
     }
 
+    // In-memory cache for EMMA_ID geometry lookups within this ingestion run,
+    // avoiding redundant DB queries when many features reference the same zone.
+    const emmaGeomCache = new Map<string, any>();
+
     // Process active features concurrently
     const processedAlerts = await mapConcurrent(activeFeatures, 8, async (feature) => {
       const alertId = feature.properties?.alertId || feature.id;
@@ -343,14 +347,19 @@ export async function fetchMeteogateWarnings(
       // Try to find EMMA_ID to get authoritative boundary from DB
       const emmaId = selectedArea?.geocode?.find((g) => g.valueName === 'EMMA_ID')?.value;
       if (emmaId) {
-        try {
-          const res = await db.execute(sql`SELECT ST_AsGeoJSON(geometry) as geojson FROM meteoalarm_zones WHERE emma_id = ${emmaId}`);
-          if (res.length > 0 && res[0]?.geojson) {
-            geom = JSON.parse(res[0].geojson as string);
-            console.log(`🗺️ [Meteogate Ingestion] Using authoritative boundary from DB for EMMA_ID: ${emmaId}`);
+        // Check in-memory cache first to avoid repeated DB queries for the same zone
+        if (emmaGeomCache.has(emmaId)) {
+          geom = emmaGeomCache.get(emmaId);
+        } else {
+          try {
+            const res = await db.execute(sql`SELECT ST_AsGeoJSON(geometry) as geojson FROM meteoalarm_zones WHERE emma_id = ${emmaId}`);
+            if (res.length > 0 && res[0]?.geojson) {
+              geom = JSON.parse(res[0].geojson as string);
+              emmaGeomCache.set(emmaId, geom);
+            }
+          } catch (dbErr) {
+            console.error(`❌ [Meteogate Ingestion] DB geometry fetch failed for EMMA_ID ${emmaId}:`, dbErr);
           }
-        } catch (dbErr) {
-          console.error(`❌ [Meteogate Ingestion] DB geometry fetch failed for EMMA_ID ${emmaId}:`, dbErr);
         }
       }
 
@@ -375,6 +384,7 @@ export async function fetchMeteogateWarnings(
               )
               ON CONFLICT (emma_id) DO NOTHING
             `);
+            emmaGeomCache.set(emmaId, geom);
             console.log(`💾 [Meteogate Ingestion] Saved new authoritative boundary to DB for EMMA_ID: ${emmaId}`);
           } catch (dbErr) {
             console.error(`❌ [Meteogate Ingestion] DB geometry save failed for EMMA_ID ${emmaId}:`, dbErr);
@@ -439,6 +449,11 @@ export async function fetchMeteogateWarnings(
     });
 
     const validAlerts = processedAlerts.filter((a): a is RawMeteoAlarmAlert => a != null);
+    if (emmaGeomCache.size > 0) {
+      console.log(
+        `🗺️ [Meteogate Ingestion] Used authoritative DB boundaries for ${emmaGeomCache.size} unique EMMA zone(s).`
+      );
+    }
     console.log(
       `✅ [Meteogate Ingestion] Successfully normalized ${validAlerts.length} warning(s) with exact polygon geometry.`
     );
