@@ -53,6 +53,7 @@ async function testRadar() {
           etaMinutes: alert.etaMinutes,
           speedKmh: alert.speedKmh,
           headingDeg: alert.headingDeg,
+          maxDbz: alert.maxDbz,
         },
         user: {
           id: 0,

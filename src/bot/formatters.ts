@@ -113,12 +113,49 @@ export function formatAlertHtml(
   );
 }
 
+/**
+ * Maps peak radar reflectivity (dBZ) to a human-readable intensity label
+ * and brief expectation, following standard meteorological thresholds.
+ */
+function describeRadarIntensity(maxDbz: number): { label: string; icon: string; expectation: string } {
+  if (maxDbz >= 60) {
+    return {
+      label: 'Extreme',
+      icon: '🟣',
+      expectation: 'Expect very heavy rain, large hail, and possible severe wind gusts.',
+    };
+  }
+  if (maxDbz >= 50) {
+    return {
+      label: 'Very heavy',
+      icon: '🔴',
+      expectation: 'Expect heavy to torrential rain and possible hail.',
+    };
+  }
+  if (maxDbz >= 45) {
+    return {
+      label: 'Heavy',
+      icon: '🟠',
+      expectation: 'Expect heavy rain and possible gusty winds.',
+    };
+  }
+  // MIN_TRACK_REFLECTIVITY_DBZ is 40
+  return {
+    label: 'Moderate-heavy',
+    icon: '🟡',
+    expectation: 'Expect moderate to heavy rain.',
+  };
+}
+
 export function formatRadarApproachHtml(notice: RadarApproachNotice, user: MatchedUser): string {
+  const intensity = describeRadarIntensity(notice.maxDbz);
   return (
     `📡 <b>Radar echo approaching your monitored location</b>\n\n` +
     `📍 <b>Location:</b> ${escapeHtml(user.locationName)}\n` +
     `⏱️ <b>Estimated closest approach:</b> about ${notice.etaMinutes} minutes\n` +
-    `💨 <b>Recent estimated motion:</b> ${notice.speedKmh.toFixed(0)} km/h\n\n` +
-    `<i>This estimate is based on movement between radar scans. It is informational, not an official weather warning. For hazard severity and safety advice, follow MeteoAlarm and your national weather service.</i>`
+    `🧭 <b>Storm movement speed:</b> ${notice.speedKmh.toFixed(0)} km/h\n` +
+    `${intensity.icon} <b>Echo intensity:</b> ${intensity.label} (${notice.maxDbz} dBZ)\n\n` +
+    `⚠️ ${intensity.expectation}\n\n` +
+    `<i>The movement speed is how fast the radar echo is travelling across the ground — it is not a wind speed. This estimate is based on movement between radar scans. It is informational, not an official weather warning. For hazard severity and safety advice, follow MeteoAlarm and your national weather service.</i>`
   );
 }
