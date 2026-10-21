@@ -4,7 +4,10 @@ import { MIN_TRACK_REFLECTIVITY_DBZ, processRadarCells, trackRadarCells, type St
 import { env } from '../config/env';
 import { alertDispatchQueue } from '../queue';
 import { evaluateAlertDeduplication } from '../redis/deduplicator';
+import { redis } from '../redis/client';
 
+const RADAR_SCAN_CACHE_KEY = 'radar:previous_scan';
+const RADAR_SCAN_TTL_SECONDS = 1200; // 20 minutes
 let activeRadarPoll: Promise<StormCell[]> | undefined;
 let previousScan: { timestamp: number; cells: StormCell[] } | undefined;
 
@@ -202,6 +205,18 @@ async function runLiveRadarPoll(): Promise<StormCell[]> {
   }
 
   if (scanTimestamp === undefined) return cells;
+
+  if (!previousScan) {
+    try {
+      const cached = await redis.get(RADAR_SCAN_CACHE_KEY);
+      if (cached) {
+        previousScan = JSON.parse(cached);
+      }
+    } catch {
+      // Ignore cache lookup errors
+    }
+  }
+
   if (previousScan?.timestamp === scanTimestamp) {
     console.log('[Radar Ingestion] Latest scan was already processed.');
     return cells;
@@ -211,6 +226,11 @@ async function runLiveRadarPoll(): Promise<StormCell[]> {
     ? trackRadarCells(previousScan.cells, previousScan.timestamp, cells, scanTimestamp)
     : cells;
   previousScan = { timestamp: scanTimestamp, cells: currentCells.map((cell) => ({ ...cell })) };
+  try {
+    await redis.setex(RADAR_SCAN_CACHE_KEY, RADAR_SCAN_TTL_SECONDS, JSON.stringify(previousScan));
+  } catch {
+    // Ignore cache persistence errors
+  }
 
   if (!currentCells.some((cell) => cell.speedKmh !== undefined)) {
     console.log('[Radar Ingestion] Stored scan as tracking baseline; no reliable motion estimates yet.');

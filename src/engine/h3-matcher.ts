@@ -37,8 +37,6 @@ export async function refreshUserH3Indexes(): Promise<void> {
 }
 
 /**
- * Inverted H3 Spatial Matching Engine.
-/**
  * Converts a StormAlert's Polygon or MultiPolygon geometry into a deduplicated list of H3 cells.
  */
 export function alertToH3Cells(alert: StormAlert, resolution: number = env.H3_RESOLUTION): string[] {
@@ -118,7 +116,7 @@ export async function matchStormUsingH3(alert: StormAlert): Promise<MatchedUser[
     FROM user_alert_zones
     WHERE h3_index IN ${impactedCells}
     AND ST_Covers(
-      ST_GeomFromGeoJSON(${polygonJson}),
+      ST_SetSRID(ST_GeomFromGeoJSON(${polygonJson}), 4326),
       location::geometry
     );
   `);
@@ -174,7 +172,7 @@ export async function benchmarkH3VsPostgis(alert: StormAlert): Promise<Benchmark
       FROM user_alert_zones
       WHERE h3_index IN ${impactedCells}
       AND ST_Covers(
-        ST_GeomFromGeoJSON(${polygonJson}),
+        ST_SetSRID(ST_GeomFromGeoJSON(${polygonJson}), 4326),
         location::geometry
       );
     `);

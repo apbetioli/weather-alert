@@ -1,8 +1,5 @@
-import { cellToParent, gridDisk } from 'h3-js';
 import { db } from '../db';
 import { sql } from 'drizzle-orm';
-import { env } from '../config/env';
-import { redis } from '../redis/client';
 
 export interface StormCell {
   id: string;
@@ -137,10 +134,32 @@ export async function processRadarCells(cells: StormCell[]): Promise<UserEtaAler
   const trackedCells = cells.filter(c => c.maxDbz >= MIN_TRACK_REFLECTIVITY_DBZ);
   if (trackedCells.length === 0) return [];
 
-  // 2. Fetch all user alert zones
+  // Spatial optimization: bounding box around all tracked cells with a 120km buffer
+  // (100 km/h max cell speed * 1 hour + 15 km corridor width + buffer)
+  let minLat = 90, maxLat = -90, minLon = 180, maxLon = -180;
+  for (const cell of trackedCells) {
+    minLat = Math.min(minLat, cell.centroidLat);
+    maxLat = Math.max(maxLat, cell.centroidLat);
+    minLon = Math.min(minLon, cell.centroidLon);
+    maxLon = Math.max(maxLon, cell.centroidLon);
+  }
+
+  // 120 km buffer in degrees (~1 deg lat = 111 km, lon adjusted by cosine)
+  const latBuffer = 120 / 111.0;
+  const avgLat = (minLat + maxLat) / 2;
+  const lonBuffer = 120 / (111.0 * Math.max(0.1, Math.cos((avgLat * Math.PI) / 180)));
+
+  const boxMinLat = Math.max(-90, minLat - latBuffer);
+  const boxMaxLat = Math.min(90, maxLat + latBuffer);
+  const boxMinLon = Math.max(-180, minLon - lonBuffer);
+  const boxMaxLon = Math.min(180, maxLon + lonBuffer);
+
+  // 2. Fetch user alert zones inside the spatial bounding box using PostGIS GiST index
   const usersRes = await db.execute(sql`
-    SELECT user_id, telegram_chat_id, location_name, h3_index, ST_Y(location::geometry) as lat, ST_X(location::geometry) as lon 
+    SELECT user_id, telegram_chat_id, location_name, h3_index,
+           ST_Y(location::geometry) as lat, ST_X(location::geometry) as lon 
     FROM user_alert_zones
+    WHERE location && ST_MakeEnvelope(${boxMinLon}, ${boxMinLat}, ${boxMaxLon}, ${boxMaxLat}, 4326)::geography
   `);
 
   const alerts: UserEtaAlert[] = [];

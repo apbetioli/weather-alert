@@ -30,7 +30,7 @@ export async function matchStormToUsers(alert: StormAlert): Promise<MatchedUser[
       ST_Y(location::geometry) AS lat
     FROM user_alert_zones
     WHERE ST_Covers(
-      ST_GeomFromGeoJSON(${polygonJson}),
+      ST_SetSRID(ST_GeomFromGeoJSON(${polygonJson}), 4326),
       location::geometry
     );
   `);

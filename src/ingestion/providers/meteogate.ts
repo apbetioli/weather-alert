@@ -231,7 +231,7 @@ export async function fetchMeteogateWarnings(
     const pageSize = 100;
     const maxPagesPerWindow = 10;
     const messageWindowMs = 23 * 60 * 60 * 1000;
-    const lookbackMs = 30 * 24 * 60 * 60 * 1000;
+    const lookbackMs = 24 * 60 * 60 * 1000; // Query within the last 24h to avoid API rate-limit exhaustion
     let rawFeatureCount = 0;
     let pagesFetched = 0;
     const activeFeatures: MeteoGateFeature[] = [];
@@ -345,7 +345,7 @@ export async function fetchMeteogateWarnings(
         : selectedInfo?.area?.[0];
 
       // Try to find EMMA_ID to get authoritative boundary from DB
-      const emmaId = selectedArea?.geocode?.find((g) => g.valueName === 'EMMA_ID')?.value;
+      const emmaId = selectedArea?.geocode?.find((g) => g.valueName?.toUpperCase() === 'EMMA_ID')?.value;
       if (emmaId) {
         // Check in-memory cache first to avoid repeated DB queries for the same zone
         if (emmaGeomCache.has(emmaId)) {
@@ -380,7 +380,7 @@ export async function fetchMeteogateWarnings(
                 ${emmaId},
                 ${countryCode},
                 ${name},
-                ST_Multi(ST_GeomFromGeoJSON(${geomStr}))
+                ST_SetSRID(ST_Multi(ST_GeomFromGeoJSON(${geomStr})), 4326)
               )
               ON CONFLICT (emma_id) DO NOTHING
             `);
