@@ -14,6 +14,7 @@ export interface RadarApproachNotice {
   etaMinutes: number;
   speedKmh: number;
   headingDeg: number;
+  maxDbz: number;
 }
 
 export interface RadarApproachJobData {

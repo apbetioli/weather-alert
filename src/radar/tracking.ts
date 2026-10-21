@@ -15,7 +15,10 @@ export interface StormCell {
 
 const EARTH_RADIUS_KM = 6371;
 export const MIN_TRACK_REFLECTIVITY_DBZ = 40;
-const MAX_TRACK_SPEED_KMH = 150;
+// Echo centroids can jump when clusters merge, split, or are mismatched between
+// scans. Keep the accepted motion conservative so a near-limit bad match cannot
+// produce a misleading user ETA.
+const MAX_TRACK_SPEED_KMH = 100;
 const MIN_TRACK_DISTANCE_KM = 1;
 const MIN_SCAN_GAP_MS = 2 * 60 * 1000;
 const MAX_SCAN_GAP_MS = 20 * 60 * 1000;
@@ -89,6 +92,7 @@ export interface UserEtaAlert {
   etaMinutes: number;
   speedKmh: number;
   headingDeg: number;
+  maxDbz: number;
 }
 
 /**
@@ -162,6 +166,7 @@ export async function processRadarCells(cells: StormCell[]): Promise<UserEtaAler
           etaMinutes: eta,
           speedKmh: cell.speedKmh!,
           headingDeg: cell.headingDeg!,
+          maxDbz: cell.maxDbz,
         });
       }
     }

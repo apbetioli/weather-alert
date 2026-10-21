@@ -230,6 +230,7 @@ async function runLiveRadarPoll(): Promise<StormCell[]> {
         etaMinutes: alert.etaMinutes,
         speedKmh: alert.speedKmh,
         headingDeg: alert.headingDeg,
+        maxDbz: alert.maxDbz,
       },
       user: {
         id: 0,
