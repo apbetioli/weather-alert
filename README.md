@@ -40,7 +40,7 @@ flowchart TD
 
 ### 1. Inverted H3 Geospatial Matching Engine
 - Rather than running slow $O(N)$ spherical polygon evaluations (`ST_Covers`) against every registered coordinate in PostGIS, the app hexifies warning polygons into **Uber H3 Resolution 6 cells** (`h3.polygonToCellsExperimental(..., 6, containmentOverlapping, true)`) buffered by 1 ring (`gridDisk`).
-- It performs a sub-millisecond B-Tree index scan on `h3_index` in PostgreSQL, followed by exact geometric verification (`ST_Covers`) solely on the filtered candidate locations. This achieves **100% spatial parity** with PostGIS spherical math at **1.8x – 5x faster speed**.
+- It performs a sub-millisecond B-Tree index scan on `h3_index` in PostgreSQL, followed by exact geometric verification (`ST_Covers`) solely on the filtered candidate locations. This achieves **100% spatial parity** with PostGIS spherical math at **up to 11.7x faster speed** (measured locally with 500k users).
 - 📖 **Deep Dive:** See [Spatial Engine Methodology](docs/spatial-engine-methodology.md) for the complete visual step-by-step breakdown.
 
 ### 2. Live Doppler Radar & Storm Cell Nowcasting
@@ -109,7 +109,7 @@ The engine implements a **two-tier coarse-to-fine filtering architecture** to re
   [ Tier 2: PostGIS ST_Covers Evaluation ]  ──► Runs ONLY on candidate users inside
                  │                              the buffered hexagons
                  ▼
-  [ 100% Spatial Parity at 1.8x – 5x Speed ]
+  [ 100% Spatial Parity at 11.7x Speed (500k Users) ]
 ```
 
 > 📖 **Full Visual Deep Dive:** See [Spatial Engine Methodology](docs/spatial-engine-methodology.md) for detailed ASCII diagrams, boundary edge cases, and architectural tradeoffs.
