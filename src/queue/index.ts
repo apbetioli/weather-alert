@@ -25,8 +25,17 @@ export interface RadarApproachJobData {
 }
 
 export type AlertJobData = WarningJobData | RadarApproachJobData;
-type WarningJobInput = Omit<WarningJobData, 'alert'> & { alert: StormAlert };
-type AlertJobInput = WarningJobInput | RadarApproachJobData;
+export type WarningJobInput = Omit<WarningJobData, 'alert'> & { alert: StormAlert };
+export type AlertJobInput = WarningJobInput | RadarApproachJobData;
+
+export function isSyntheticChat(user: { telegramChatId: number; locationName?: string }): boolean {
+  return (
+    Boolean(user.locationName?.startsWith('Test User')) ||
+    Boolean(user.locationName?.startsWith('Mira Test User')) ||
+    (user.telegramChatId >= 100_000_000 && user.telegramChatId <= 101_000_000) ||
+    user.telegramChatId >= 900_000_000
+  );
+}
 
 export const ALERT_DISPATCH_QUEUE_NAME = 'alert-dispatch';
 
@@ -49,4 +58,16 @@ export async function enqueueAlertDispatch(jobData: AlertJobInput) {
     return await alertDispatchQueue.add('dispatch-alert', { ...jobData, alert });
   }
   return await alertDispatchQueue.add('dispatch-alert', jobData);
+}
+
+export async function enqueueAlertDispatchBatch(jobs: AlertJobInput[]) {
+  if (jobs.length === 0) return [];
+  const bulkJobs = jobs.map((jobData) => {
+    if ('alert' in jobData) {
+      const { polygonGeoJson: _polygonGeoJson, ...alert } = jobData.alert;
+      return { name: 'dispatch-alert', data: { ...jobData, alert } };
+    }
+    return { name: 'dispatch-alert', data: jobData };
+  });
+  return await alertDispatchQueue.addBulk(bulkJobs);
 }

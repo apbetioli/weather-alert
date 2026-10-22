@@ -2,7 +2,7 @@ import { fetchMeteogateWarnings } from './providers/meteogate';
 import { mergeMeteoAlarmWarningAreas, normalizeMeteoAlarmAlert } from './normalizer';
 import { matchStormUsingH3 } from '../engine/h3-matcher';
 import { evaluateAlertDeduplication, releaseFailedAlertDispatch } from '../redis/deduplicator';
-import { enqueueAlertDispatch } from '../queue';
+import { enqueueAlertDispatchBatch, isSyntheticChat, type AlertJobInput } from '../queue';
 
 export interface PollResult {
   totalAlerts: number;
@@ -65,6 +65,10 @@ async function runMeteoAlarmPoll(): Promise<PollResult> {
 
     totalMatchEvents += matchedUsers.length;
 
+    let stormApproved = 0;
+    let stormSuppressed = 0;
+    const pendingJobs: AlertJobInput[] = [];
+
     for (const user of matchedUsers) {
       uniqueMatchedUsers.add(user.telegramChatId);
 
@@ -79,27 +83,47 @@ async function runMeteoAlarmPoll(): Promise<PollResult> {
 
       if (dedup.shouldSend) {
         approvedAlertsCount++;
-        console.log(
-          `🚀 [Poller] Approved alert for chat ${user.telegramChatId} (${user.locationName}) - Warning: "${alert.event}" [Reason: ${dedup.reason}]`
-        );
-        try {
-          await enqueueAlertDispatch({
+        stormApproved++;
+
+        // Log individual approvals for real users; suppress per-user spam for synthetic test users
+        if (!isSyntheticChat(user)) {
+          console.log(
+            `🚀 [Poller] Approved alert for chat ${user.telegramChatId} (${user.locationName}) - Warning: "${alert.event}" [Reason: ${dedup.reason}]`
+          );
+        }
+
+        // Only enqueue real users to avoid flooding BullMQ with dummy jobs
+        if (!isSyntheticChat(user)) {
+          pendingJobs.push({
             alert,
             user,
             reason: dedup.reason,
             dedupTimestamp: dedup.timestamp,
           });
-        } catch (err) {
-          await releaseFailedAlertDispatch(user.telegramChatId, alert.cellId, dedup.timestamp);
-          throw err;
         }
       } else {
         suppressedAlertsCount++;
-        console.log(
-          `🛑 [Poller] Suppressed redundant alert for chat ${user.telegramChatId} (Cell: ${alert.cellId})`
-        );
+        stormSuppressed++;
+
+        if (!isSyntheticChat(user)) {
+          console.log(
+            `🛑 [Poller] Suppressed redundant alert for chat ${user.telegramChatId} (Cell: ${alert.cellId})`
+          );
+        }
       }
     }
+
+    if (pendingJobs.length > 0) {
+      try {
+        await enqueueAlertDispatchBatch(pendingJobs);
+      } catch (err) {
+        console.error(`❌ [Poller] Failed to enqueue alert batch for ${alert.cellId}:`, err);
+      }
+    }
+
+    console.log(
+      `⬡ [Poller] Warning "${alert.event}" (${alert.cellId}): ${matchedUsers.length} matched -> ${stormApproved} approved, ${stormSuppressed} suppressed.`
+    );
     } catch (err) {
       console.error(`❌ [Poller] Skipping failed alert ${raw.identifier}:`, err);
     }

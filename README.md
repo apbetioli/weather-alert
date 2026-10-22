@@ -270,7 +270,7 @@ Features:
 
 ---
 
-## 🗺️ Roadmap & Implementation Checklist
+## 🗺️  Roadmap & Implementation Checklist
 
 ### ✅ Phase 1: Foundation & Dual Spatial Indexing ([MVP 1](docs/mvp1-plan.md))
 - [x] Bun runtime environment with native TypeScript execution and `.env` parsing

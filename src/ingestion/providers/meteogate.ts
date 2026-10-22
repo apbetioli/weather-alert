@@ -450,7 +450,7 @@ export async function fetchMeteogateWarnings(
     const validAlerts = processedAlerts.filter((a): a is RawMeteoAlarmAlert => a != null);
     if (emmaGeomCache.size > 0) {
       console.log(
-        `🗺️ [Meteogate Ingestion] Used authoritative DB boundaries for ${emmaGeomCache.size} unique EMMA zone(s).`
+        `🗺️  [Meteogate Ingestion] Used authoritative DB boundaries for ${emmaGeomCache.size} unique EMMA zone(s).`
       );
     }
     console.log(
