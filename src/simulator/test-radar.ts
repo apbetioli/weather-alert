@@ -7,14 +7,16 @@ import { env } from '../config/env';
 
 async function testRadar() {
   const testChatId = 900000000 + Math.floor(Math.random() * 99999999);
-  const testH3 = h3.latLngToCell(45.4396, 12.1225, env.H3_RESOLUTION);
+  const testLat = 45.438;
+  const testLon = 12.235;
+  const testH3 = h3.latLngToCell(testLat, testLon, env.H3_RESOLUTION);
   try {
-  console.log('🌪️  Simulating multiple radar cells near Mira (45.4396, 12.1225)...');
+  console.log(`🌪️  Simulating multiple radar cells near radar test location (${testLat}, ${testLon})...`);
   
-  // 1. Ensure Mira is in the DB
+  // 1. Ensure test user is in the DB
   await db.execute(sql`
     INSERT INTO user_alert_zones (user_id, telegram_chat_id, location_name, location, h3_index)
-    VALUES (gen_random_uuid(), ${testChatId}, 'Mira Test User', ST_GeogFromText('SRID=4326;POINT(12.1225 45.4396)'), ${testH3})
+    VALUES (gen_random_uuid(), ${testChatId}, 'Radar Test User', ST_GeogFromText('SRID=4326;POINT(${sql.raw(String(testLon))} ${sql.raw(String(testLat))})'), ${testH3})
     ON CONFLICT (telegram_chat_id) DO NOTHING
   `);
 
@@ -22,16 +24,16 @@ async function testRadar() {
   const simulatedCells: StormCell[] = [
     {
       id: 'supercell-alpha',
-      centroidLat: 45.3396,
-      centroidLon: 11.9725,
+      centroidLat: testLat - 0.1,
+      centroidLon: testLon - 0.25,
       maxDbz: 55,
       speedKmh: 50,
       headingDeg: 45
     },
     {
       id: 'heavy-rain-beta',
-      centroidLat: 45.4000,
-      centroidLon: 12.0000,
+      centroidLat: testLat - 0.04,
+      centroidLon: testLon - 0.235,
       maxDbz: 42,
       speedKmh: 30,
       headingDeg: 90
@@ -60,9 +62,9 @@ async function testRadar() {
           userId: alert.userId,
           telegramChatId: alert.telegramChatId,
           h3Index: testH3,
-          locationName: 'Mira (Radar Tracked)',
-          lat: 45.4396,
-          lon: 12.1225
+          locationName: 'Monitored Zone (Radar Tracked)',
+          lat: testLat,
+          lon: testLon
         },
         reason: 'Radar Tracking ETA'
       }, { priority: 3 });

@@ -24,13 +24,13 @@ While PostGIS's **GiST index** (R-Tree) accelerates this query by comparing boun
 To achieve high throughput, the database stores **two complementary spatial representations** for every user location:
 
 ```text
-               User at Venice, Italy (45.4396°N, 12.1225°E)
+               User at Venice, Italy (45.4408°N, 12.3155°E)
                                    |
            +-----------------------+-----------------------+
            |                                               |
            v                                               v
    [ PostGIS Point ]                               [ Uber H3 Cell ]
-ST_MakePoint(12.1225, 45.4396)           h3.latLngToCell(lat, lon, res=6)
+ST_MakePoint(12.3155, 45.4408)           h3.latLngToCell(lat, lon, res=6)
            |                                               |
       Exact point on Earth                      "861ea55b7ffffff" (discrete cell)
            |                                               |
