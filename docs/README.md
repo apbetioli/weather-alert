@@ -69,13 +69,17 @@ flowchart TD
 - [x] PostGIS spatial bounding box optimization for radar user queries (`location && ST_MakeEnvelope`)
 - [x] Radar tracking simulation suite (`bun run test:radar`)
 
-### 🔮 Phase 5: Multi-Channel Delivery & Production Hardening ([MVP 5 Plan](mvp5-plan.md))
+### 🔮 Phase 5: Multi-Hazard Threshold Alerts & Production Hardening ([MVP 5 Plan](mvp5-plan.md) | [Threshold Methodology](threshold-alerts-methodology.md))
+- [ ] Quantitative NWP forecast ingestion via Open-Meteo (ECMWF IFS / DWD ICON)
+- [ ] User-configurable thresholds: Rainfall (mm), Snowfall (cm), Wind Gusts (km/h), Frost (°C), Heat (°C), and Hail Risk
+- [ ] Consolidated multi-hazard card bundling (merges concurrent breaches into a single notification)
+- [ ] Interactive Telegram menu (`/thresholds`) with inline presets and quick slash commands (`/setrain`, etc.)
+- [ ] 24-hour Redis deduplication window to prevent alert fatigue
 - [ ] User-configurable alerting thresholds (minimum severity level: Yellow vs Orange vs Red)
 - [ ] Convective / Hail only filtering toggle (`/settings` or `/setlevel`)
 - [ ] Multi-zone monitoring per user (e.g. Home, Office, Vacation home)
 - [ ] Quiet hours with life-safety overrides (extreme Red alerts bypass quiet hours)
 - [ ] Multi-channel delivery adapters:
-  - [ ] WhatsApp Cloud API dispatch worker
   - [ ] Web Push (PWA) notifications
 - [ ] Production webhook migration for Telegram bot (replacing long polling)
 - [ ] Automated unit test suite with `bun test` for pure normalization, tracking, and formatting logic

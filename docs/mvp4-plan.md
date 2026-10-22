@@ -16,7 +16,7 @@ In MVPs 1–3, we established the core spatial indexing (PostGIS + Uber H3 Res-7
    - Isolate high-reflectivity convective cores ($\ge 50\text{ dBZ}$) associated with severe hail and supercells.
    - Compute storm cell motion vectors (speed and heading in knots / km/h).
 4. **Hyper-Local Dynamic ETA Calculation:**
-   - Calculate precise time-to-impact (ETA in minutes) from the moving hail core to the user's registered location (e.g., Mira, Veneto).
+   - Calculate precise time-to-impact (ETA in minutes) from the moving hail core to the user's registered location (e.g., Monitored Location).
 5. **H3 Spatial Parent Roll-Up (Scaled Radar Ingestion):**
    - Group thousands of Resolution 7 user hexagons into Resolution 3 parent zones (`h3.cellToParent(cell, 3)`) to minimize radar bounding-box polling overhead.
 
@@ -84,7 +84,7 @@ flowchart TD
   - $\ge 50\text{ dBZ}$: Severe storm / high probability of small hail ($1\text{--}2\text{ cm}$).
   - $\ge 60\text{ dBZ}$: Extreme supercell / large hail ($\ge 3\text{--}5\text{ cm}$).
 - Spatial cell centroid tracking across successive radar sweeps ($t_0$ and $t_{-5\text{min}}$) to derive storm speed ($\text{km/h}$) and direction ($\text{bearing}^\circ$).
-- Extrapolates cone of trajectory towards user coordinates (e.g. Mira, Venice).
+- Extrapolates cone of trajectory towards user coordinates.
 
 ### 4. ETA & Dynamic Warning Formatter
 - Telegram notification payload enhanced with:
@@ -98,9 +98,9 @@ flowchart TD
 
 1. **Authoritative Boundary Verification:**
    - Ingest Italian and European warning areas.
-   - Query coordinates for `Mira (45.4396, 12.1225)` and assert it strictly intersects the official Veneto zone polygon without any manual bounding boxes.
+   - Query coordinates for `Test Location (45.44, 12.31)` and assert it strictly intersects the official Veneto zone polygon without any manual bounding boxes.
 2. **MeteoGate Ingestion Test:**
    - Script `src/simulator/test-meteogate.ts` querying `https://api.meteogate.eu/warnings` using the API key.
 3. **Radar Motion & ETA Simulation:**
-   - Simulate a $55\text{ dBZ}$ hail cell $15\text{ km}$ south-west of Mira moving at $50\text{ km/h}$.
+   - Simulate a $55\text{ dBZ}$ hail cell $15\text{ km}$ south-west of the test location moving at $50\text{ km/h}$.
    - Verify ETA calculates to $\sim 18\text{ minutes}$ and correctly enqueues a high-priority alert.

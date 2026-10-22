@@ -31,7 +31,7 @@ export type AlertJobInput = WarningJobInput | RadarApproachJobData;
 export function isSyntheticChat(user: { telegramChatId: number; locationName?: string }): boolean {
   return (
     Boolean(user.locationName?.startsWith('Test User')) ||
-    Boolean(user.locationName?.startsWith('Mira Test User')) ||
+    Boolean(user.locationName?.startsWith('Radar Test User')) ||
     (user.telegramChatId >= 100_000_000 && user.telegramChatId <= 101_000_000) ||
     user.telegramChatId >= 900_000_000
   );

@@ -62,6 +62,18 @@ flowchart TD
 - A custom grammY transformer intercepts Telegram `400: can't parse entities` errors and retries the message as sanitized plain text, guaranteeing life-safety alerts are never dropped due to malformed upstream tags.
 - Rate-limited to 30 messages/sec in BullMQ to adhere to Telegram API broadcast guidelines.
 
+### 5. Quantitative Forecasting & Multi-Hazard Thresholds
+- Complements civil defense bulletins and live radar with personalized, everyday numerical weather prediction (NWP) threshold alerts.
+- Ingests high-resolution European models (DWD ICON / ECMWF via Open-Meteo) to track rolling 24-hour accumulation and extremes:
+  - 🌧️ **Rainfall** (mm accumulation)
+  - ❄️ **Snowfall** (cm accumulation)
+  - 💨 **Wind Gusts** (km/h peak)
+  - 🥶 **Frost / Freeze** (°C minimum)
+  - 🌡️ **Extreme Heat** (°C maximum)
+  - 🧊 **Hail Risk** (WMO codes + CAPE & radar nowcasting)
+- Bundles multiple simultaneous threshold breaches into consolidated cards with 24-hour Redis cooldown deduplication.
+- 📖 **Deep Dive:** See [Threshold Alerts Methodology](docs/threshold-alerts-methodology.md) for the complete visual step-by-step breakdown.
+
 ---
 
 ## ⬡ Spatial Matching Methodology (PostGIS + Uber H3)
