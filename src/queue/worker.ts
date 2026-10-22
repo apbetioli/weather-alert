@@ -1,7 +1,7 @@
 import { Worker } from 'bullmq';
 import { Bot, GrammyError } from 'grammy';
 import { redis } from '../redis/client';
-import { ALERT_DISPATCH_QUEUE_NAME, type AlertJobData } from './index';
+import { ALERT_DISPATCH_QUEUE_NAME, isSyntheticChat, type AlertJobData } from './index';
 import { formatAlertHtml, formatRadarApproachHtml } from '../bot/formatters';
 import { releaseFailedAlertDispatch } from '../redis/deduplicator';
 
@@ -10,6 +10,12 @@ export function startDispatchWorker(bot: Bot): Worker<AlertJobData> {
     ALERT_DISPATCH_QUEUE_NAME,
     async (job) => {
       const { user, reason } = job.data;
+
+      // Mock dispatch for synthetic test users to prevent hitting Telegram API and getting rate-limited/banned
+      if (isSyntheticChat(user)) {
+        return;
+      }
+
       console.log(
         `📬 [Queue Worker] Processing alert job ${job.id} for user ${user.telegramChatId} (${user.locationName}) [Reason: ${reason}]`
       );
@@ -44,7 +50,9 @@ export function startDispatchWorker(bot: Bot): Worker<AlertJobData> {
   );
 
   worker.on('completed', (job) => {
-    console.log(`✨ [Queue Worker] Job ${job.id} completed successfully.`);
+    if (!isSyntheticChat(job.data.user)) {
+      console.log(`✨ [Queue Worker] Job ${job.id} completed successfully.`);
+    }
   });
 
   worker.on('failed', (job, err) => {

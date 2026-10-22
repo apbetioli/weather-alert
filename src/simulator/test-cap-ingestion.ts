@@ -81,7 +81,7 @@ async function runCapIngestionVerification() {
     console.log(`✅ Seeded ${testUsers.length} test zones with PostGIS GiST and H3 B-Tree indexes.\n`);
 
     // Step 4: Verify Spatial Parity between PostGIS and Inverted H3
-    console.log('⚖️ Step 4: Asserting Spatial Parity (PostGIS ST_Covers vs Inverted H3 B-Tree)...');
+    console.log('⚖️  Step 4: Asserting Spatial Parity (PostGIS ST_Covers vs Inverted H3 B-Tree)...');
     const testStorm = createSyntheticAlert(45.438, 12.235); // Centered on Verona
 
     const postgisMatches = await matchStormToUsers(testStorm);
