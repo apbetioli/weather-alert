@@ -203,12 +203,16 @@ A common question is: *Why not add a 1-ring neighbor buffer to the user's locati
 
 ## 5. Performance Benchmark
 
-The system includes a side-by-side benchmark command (`/testh3match` or `bun run simulate`):
+The system includes a side-by-side benchmark command (`/testh3match` or `bun run benchmark`):
+
+### 500,000 Users Benchmark Results (Local Docker)
 
 | Metric | Pure PostGIS (`ST_Covers`) | Inverted H3 + PostGIS |
 | :--- | :--- | :--- |
 | **Index Used** | GiST (R-Tree) on geometry | B-Tree on `h3_index` + GiST verification |
 | **Pruning Phase** | 2D bounding box intersection | Exact 64-bit integer / string match |
 | **Candidate Count** | Broad bounding box candidates | Narrow hexagon candidates |
-| **Execution Speed** | Baseline ($1\text{x}$) | **1.8x – 5.0x faster** |
+| **Execution Speed** | Baseline ($1\text{x}$) | **11.73x faster** |
 | **Accuracy** | 100% (ground truth) | **100% (exact spatial parity)** |
+
+> **Local Benchmark Run (500k users):** `Benchmark finished: Inverted H3 speedup = 11.73x.`

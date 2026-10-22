@@ -137,7 +137,7 @@ flowchart TD
   2. Parsing of CAP XML into TypeScript objects.
   3. Conversion of Italian CAP polygons into H3 cells.
   4. Accuracy comparison between Inverted H3 match vs PostGIS `ST_Covers`.
-* Add `"poll"` script to `package.json`: `bun run poll`.
+* Add `"benchmark"` script to `package.json`: `bun run benchmark`.
 
 ---
 
