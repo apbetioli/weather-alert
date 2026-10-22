@@ -48,16 +48,16 @@ flowchart TD
 - [x] Bull Board real-time monitoring UI dashboard (`/ui`)
 - [x] Multi-sweep deduplication verification suite (`bun run test:dedup`)
 
-### ✅ Phase 3: Inverted H3 Spatial Engine & Feed Ingestion ([MVP 3 Plan](mvp3-plan.md))
+### ✅ Phase 3: Inverted H3 Spatial Engine & Feed Ingestion ([MVP 3 Plan](mvp3-plan.md) | [Spatial Methodology](spatial-engine-methodology.md))
 - [x] Inverted H3 spatial matching engine (`alertToH3Cells` + coarse-to-fine B-Tree index scan)
-- [x] 1-ring hexagon buffer (`gridDisk`) ensuring zero boundary misses and 100% PostGIS parity
+- [x] 1-ring hexagon buffer (`gridDisk`) ensuring zero boundary misses and 100% PostGIS parity (see [Methodology Guide](spatial-engine-methodology.md))
 - [x] CAP alert normalization across 14 MeteoAlarm hazard types and awareness levels (Yellow, Orange, Red)
 - [x] Multi-area polygon merging for split CAP warning features (`mergeMeteoAlarmWarningAreas`)
 - [x] Universal Telegram API fallback transformer (gracefully handles HTML parse errors as plain text)
 - [x] On-demand feed query command (`/pollalerts`) & H3 benchmark command (`/testh3match`)
 - [x] Automated 10-minute authoritative warning poller with concurrency mutex
 
-### ✅ Phase 4: MeteoGate API & Live Doppler Radar Nowcasting ([MVP 4 Plan](mvp4-plan.md))
+### ✅ Phase 4: MeteoGate API & Live Doppler Radar Nowcasting ([MVP 4 Plan](mvp4-plan.md) | [Radar Methodology](radar-nowcasting-methodology.md))
 - [x] EUMETNET MeteoGate Warnings API integration (`api.meteogate.eu/warnings`)
 - [x] Authoritative EMMA warning boundary ingestion and caching (`meteoalarm_zones`)
 - [x] Live OPERA European radar composite ingestion (`.h5` HDF5 format via `jsfive`)
@@ -65,7 +65,7 @@ flowchart TD
 - [x] Convective core clustering ($\ge 40\text{ dBZ}$) and connected-component analysis
 - [x] Storm cell tracking across radar sweeps (displacement, velocity in km/h, compass heading)
 - [x] Radar tracking state persistence in Redis (`radar:previous_scan`) across restarts
-- [x] Hyper-local dynamic user ETA calculation (along-track / cross-track trajectory cone)
+- [x] Hyper-local dynamic user ETA calculation (along-track / cross-track trajectory cone; see [Radar Methodology](radar-nowcasting-methodology.md))
 - [x] PostGIS spatial bounding box optimization for radar user queries (`location && ST_MakeEnvelope`)
 - [x] Radar tracking simulation suite (`bun run test:radar`)
 

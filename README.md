@@ -41,12 +41,14 @@ flowchart TD
 ### 1. Inverted H3 Geospatial Matching Engine
 - Rather than running slow $O(N)$ spherical polygon evaluations (`ST_Covers`) against every registered coordinate in PostGIS, the app hexifies warning polygons into **Uber H3 Resolution 6 cells** (`h3.polygonToCellsExperimental(..., 6, containmentOverlapping, true)`) buffered by 1 ring (`gridDisk`).
 - It performs a sub-millisecond B-Tree index scan on `h3_index` in PostgreSQL, followed by exact geometric verification (`ST_Covers`) solely on the filtered candidate locations. This achieves **100% spatial parity** with PostGIS spherical math at **1.8x – 5x faster speed**.
+- 📖 **Deep Dive:** See [Spatial Engine Methodology](docs/spatial-engine-methodology.md) for the complete visual step-by-step breakdown.
 
 ### 2. Live Doppler Radar & Storm Cell Nowcasting
 - Direct in-memory parsing of European OPERA radar composites (`.h5` HDF5 format) via `jsfive` and projection from LAEA to WGS84 using `proj4`.
 - Connected-component clustering isolates high-reflectivity convective cores ($\ge 40\text{ dBZ}$) and tracks cell displacement across consecutive sweeps to derive storm travel speed ($\text{km/h}$) and compass heading ($\text{bearing}^\circ$).
 - Computes a dynamic user ETA (in minutes) based on an along-track / cross-track trajectory cone.
 - Velocity tracking state is persisted in Redis (`radar:previous_scan`), making nowcasting resilient across application restarts.
+- 📖 **Deep Dive:** See [Doppler Radar Nowcasting Methodology](docs/radar-nowcasting-methodology.md) for the complete visual step-by-step breakdown.
 
 ### 3. Atomic Redis Lua Deduplication Gate
 - An atomic Lua script in Redis prevents notification fatigue:
@@ -59,6 +61,86 @@ flowchart TD
 - Alerts are formatted with official MeteoAlarm awareness color badges (🟡 Yellow, 🟠 Orange, 🔴 Red) and hazard symbols.
 - A custom grammY transformer intercepts Telegram `400: can't parse entities` errors and retries the message as sanitized plain text, guaranteeing life-safety alerts are never dropped due to malformed upstream tags.
 - Rate-limited to 30 messages/sec in BullMQ to adhere to Telegram API broadcast guidelines.
+
+---
+
+## ⬡ Spatial Matching Methodology (PostGIS + Uber H3)
+
+The engine implements a **two-tier coarse-to-fine filtering architecture** to resolve curved weather hazard polygons against user locations:
+
+```text
++-------------------+-------------------------------------------------------------+
+| Step              | What Happens                                                |
++-------------------+-------------------------------------------------------------+
+| 1. Registration   | User point is saved with PostGIS Point AND an H3 Cell ID    |
+| 2. Storm Ingest   | Curved weather polygon arrives via GeoJSON                  |
+| 3. Hexification   | Polygon converted to discrete H3 hexagons in memory         |
+| 4. 1-Ring Buffer  | gridDisk(1) adds a border ring to avoid missing edge users  |
+| 5. Tier 1 (H3)    | Fast B-Tree scan prunes 99.9% of unrelated users in <1ms    |
+| 6. Tier 2 (GIS)   | ST_Covers verifies candidates against exact curved boundary |
+| 7. Notification   | Redis deduplicates and Telegram delivers the alert          |
++-------------------+-------------------------------------------------------------+
+```
+
+```text
+                  Two-Tier Coarse-to-Fine Matching:
+
+  [ Incoming Storm Warning Polygon ]
+                 │
+                 ▼
+  [ In-Memory Hexification + 1-Ring Buffer (gridDisk) ]
+                 │
+                 ▼
+  [ Tier 1: PostgreSQL B-Tree Index Scan ] ──► Prunes 99.9% of users in <1ms
+                 │
+                 ▼
+  [ Tier 2: PostGIS ST_Covers Evaluation ]  ──► Runs ONLY on candidate users inside
+                 │                              the buffered hexagons
+                 ▼
+  [ 100% Spatial Parity at 1.8x – 5x Speed ]
+```
+
+> 📖 **Full Visual Deep Dive:** See [Spatial Engine Methodology](docs/spatial-engine-methodology.md) for detailed ASCII diagrams, boundary edge cases, and architectural tradeoffs.
+
+---
+
+## 📡 Doppler Radar Nowcasting Methodology
+
+The radar tracking engine converts pan-European OPERA radar composites into hyper-local storm trajectory alerts with arrival times:
+
+```text
+                           THE 15-KM THREAT CORRIDOR
+                           
+                                                Corridor Boundary (+15 km)
+       - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - 
+                                                        User B
+                                                           * (Cross-track: 6 km)
+                                                    
+      [Storm Cell] === Heading: 65° ===► ── ── ── ── ── ── ── ── ── ── ── 
+                                                     
+                                                               User C
+       - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - * - - - 
+                                                Corridor Boundary (-15 km)
+                                                
+                 * User A                                 * User D
+            (Behind storm,                           (Too far off path,
+             Along-track ≤ 0)                         Cross-track: 28 km)
+```
+
+```text
++---------------------+---------------------------------------------------------+
+| Pipeline Stage      | What Happens                                            |
++---------------------+---------------------------------------------------------+
+| 1. Binary Ingest    | In-memory HDF5 (.h5) decoding of European OPERA radar   |
+| 2. Core Detection   | Filter ≥40 dBZ convective cores & LAEA ➔ WGS84 convert  |
+| 3. Motion Tracking  | Compare scan T₀ vs T₁: derive speed (km/h) & heading    |
+| 4. Spatial Pruning  | PostGIS 120km envelope (ST_MakeEnvelope) via GiST index |
+| 5. Corridor Math    | Threat if Cross-Track ≤ 15km, Along-Track > 0, ETA ≤60m |
+| 6. Deduplication    | Redis lock (TTL = ETA + 10m) prevents repeat spam       |
++---------------------+---------------------------------------------------------+
+```
+
+> 📖 **Full Visual Deep Dive:** See [Doppler Radar Nowcasting Methodology](docs/radar-nowcasting-methodology.md) for detailed formulas, coordinate transforms, and flood-fill clustering algorithms.
 
 ---
 
