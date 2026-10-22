@@ -36,6 +36,11 @@ flowchart TD
 
 ---
 
+> 🏛️ **Architecture Decisions & Engineering Challenges:**
+> For a comprehensive, issue-by-issue breakdown of architectural trade-offs, evaluated alternatives, benchmarks, and decisions made across all phases, see the **[Engineering Challenges & Decisions Log](docs/CHALLENGES_AND_DECISIONS.md)**.
+
+---
+
 ## ⚡ Core Technical Highlights
 
 ### 1. Inverted H3 Geospatial Matching Engine

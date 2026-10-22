@@ -6,6 +6,9 @@ This directory contains the specifications, architectural plans, and verificatio
 
 The Severe Weather Alert System is a hyper-local, real-time alert engine designed for convective storms, severe hail, and hazardous meteorological events across Italy and Europe.
 
+> [!NOTE]
+> For a detailed, issue-by-issue breakdown of architectural trade-offs, evaluated alternatives, and technical decisions made from inception to present, refer to the **[Engineering Challenges & Decisions Log](CHALLENGES_AND_DECISIONS.md)**.
+
 ```mermaid
 flowchart TD
     subgraph Phase1["Implemented Phases"]
