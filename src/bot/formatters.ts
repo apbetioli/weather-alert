@@ -22,14 +22,17 @@ export function escapeHtml(text: string | number): string {
 }
 
 function escapeHtmlWithinLimit(value: string | number, maxLength: number): string {
-  const input = String(value);
+  const fullEscaped = escapeHtml(String(value));
+  if (fullEscaped.length <= maxLength) return fullEscaped;
   let output = '';
-  for (const char of input) {
+  for (const char of String(value)) {
     const escaped = escapeHtml(char);
-    if (output.length + escaped.length > maxLength) break;
+    if (output.length + escaped.length > maxLength) {
+      if (output.length + 3 <= maxLength) output += '...';
+      break;
+    }
     output += escaped;
   }
-  if (output.length < escapeHtml(input).length && output.length + 3 <= maxLength) output += '...';
   return output;
 }
 

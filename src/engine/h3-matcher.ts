@@ -114,7 +114,7 @@ export async function matchStormUsingH3(alert: StormAlert): Promise<MatchedUser[
       ST_X(location::geometry) AS lon,
       ST_Y(location::geometry) AS lat
     FROM user_alert_zones
-    WHERE h3_index IN ${impactedCells}
+    WHERE h3_index = ANY(${impactedCells})
     AND ST_Covers(
       ST_SetSRID(ST_GeomFromGeoJSON(${polygonJson}), 4326),
       location::geometry
@@ -170,7 +170,7 @@ export async function benchmarkH3VsPostgis(alert: StormAlert): Promise<Benchmark
         ST_X(location::geometry) AS lon,
         ST_Y(location::geometry) AS lat
       FROM user_alert_zones
-      WHERE h3_index IN ${impactedCells}
+      WHERE h3_index = ANY(${impactedCells})
       AND ST_Covers(
         ST_SetSRID(ST_GeomFromGeoJSON(${polygonJson}), 4326),
         location::geometry

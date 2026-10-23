@@ -107,7 +107,8 @@ export async function releaseFailedAlertDispatch(
 ): Promise<void> {
   const key = `alert:state:${userId}:${cellId}`;
   await redis.eval(`
-    if redis.call('HGET', KEYS[1], 'last_notified_at') == ARGV[1] then
+    local stored = redis.call('HGET', KEYS[1], 'last_notified_at')
+    if stored and stored == ARGV[1] then
       return redis.call('DEL', KEYS[1])
     end
     return 0

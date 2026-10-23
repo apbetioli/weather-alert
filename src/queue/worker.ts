@@ -65,12 +65,14 @@ export function startDispatchWorker(bot: Bot): Worker<AlertJobData> {
         ? job.data.alert.cellId
         : 'radar' in job.data
         ? job.data.radar.stormCellId
-        : 'threshold';
-      releaseFailedAlertDispatch(
-        job.data.user.telegramChatId,
-        cellId,
-        job.data.dedupTimestamp
-      ).catch((releaseError) => console.error('Failed to release alert dedup state:', releaseError));
+        : null; // ThresholdAlertJobData has no cellId; skip dedup release
+      if (cellId) {
+        releaseFailedAlertDispatch(
+          job.data.user.telegramChatId,
+          cellId,
+          job.data.dedupTimestamp
+        ).catch((releaseError) => console.error('Failed to release alert dedup state:', releaseError));
+      }
     }
   });
 
