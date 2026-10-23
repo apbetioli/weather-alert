@@ -369,7 +369,6 @@ export async function fetchMeteogateWarnings(
         // If we successfully fetched it and we have an EMMA_ID, save it to the DB for next time
         if (geom && geom.coordinates && geom.coordinates.length > 0 && emmaId) {
           try {
-            const countryCode = feature.properties?.countryCode || 'EU';
             const name = selectedArea?.areaDesc || countryCode;
             const geomStr = JSON.stringify(geom);
             
@@ -435,7 +434,7 @@ export async function fetchMeteogateWarnings(
         headline: selectedInfo?.headline,
         description: selectedInfo?.description,
         instruction: selectedInfo?.instruction,
-        effective: selectedInfo?.onset || selectedInfo?.expires,
+        effective: selectedInfo?.onset,
         onset: selectedInfo?.onset,
         expires: selectedInfo?.expires,
         webUrl: selectedInfo?.web || feature.properties?.hubLink,
