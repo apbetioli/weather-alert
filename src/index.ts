@@ -69,6 +69,16 @@ async function main() {
     );
   }
 
+  // Hot reload cleanup handling
+  if ((import.meta as any).hot) {
+    (import.meta as any).hot.dispose(async () => {
+      pollerHandles?.stop();
+      if (bot) bot.stop();
+      if (worker) await worker.close();
+      server.stop();
+    });
+  }
+
   // Graceful shutdown handling
   let isShuttingDown = false;
   const shutdown = async (signal: string) => {

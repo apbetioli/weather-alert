@@ -247,7 +247,10 @@ The app will:
 | `/testh3match` | Run a side-by-side benchmark: Inverted H3 vs PostGIS `ST_Covers` |
 | `/testalert` | Simulate an incoming storm cell over your coordinates |
 | `/testescalate` | Simulate a rapid severity escalation (surge to Red alert) |
-| `/resetalerts` | Reset your Redis cooldown window for fresh testing |
+| `/testradar` | Simulate an approaching Doppler radar storm cell |
+| `/testthreshold` | Simulate a multi-hazard forecast threshold breach |
+| `/pollthresholds` | On-demand sweep evaluating weather thresholds for all users |
+| `/resetalerts` | Reset your Redis cooldown window across warnings, radar, and forecast thresholds |
 | `/help` | Complete service guide and awareness level explanations |
 
 ---

@@ -172,5 +172,8 @@ It lets you view:
 * `/testh3match`: Benchmarks Inverted H3 matching vs PostGIS `ST_Covers` side-by-side with exact timing in milliseconds.
 * `/testalert`: Simulates `CELL_HAIL_SIM_01` (3.5 cm). First send delivers alert; second send within 45m is suppressed by Redis!
 * `/testescalate`: Simulates hail surging to 5.2 cm ($\Delta \ge 1.5\text{ cm}$). Bypasses cooldown immediately!
-* `/resetalerts`: Clears your Redis cooldown state so you can re-test from scratch.
+* `/testradar`: Simulates an approaching Doppler radar storm cell with velocity and ETA.
+* `/testthreshold`: Simulates a multi-hazard 24-hour forecast threshold breach (rain, wind gusts, frost).
+* `/pollthresholds`: Triggers an immediate threshold evaluation sweep for all users against live NWP predictions.
+* `/resetalerts`: Clears your Redis cooldown state across warnings, radar, and forecast thresholds so you can re-test from scratch.
 * `/status`: Displays your registered coordinates and Uber H3 Resolution 7 hexagon.

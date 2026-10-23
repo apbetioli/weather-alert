@@ -4,7 +4,7 @@
   "type": "module",
   "private": true,
   "scripts": {
-    "dev": "bun run --hot src/index.ts",
+    "dev": "bun --watch src/index.ts",
     "check:db": "bun run src/db/check.ts",
     "migrate": "bun run src/db/migrate.ts",
     "simulate": "bun run src/simulator/cli.ts",

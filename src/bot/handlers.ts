@@ -5,13 +5,13 @@ import { db } from '../db';
 import { matchStormToUsers } from '../engine/matcher';
 import { createSyntheticAlert } from '../simulator/generate-alert';
 import { escapeHtml, formatThresholdAlertHtml } from './formatters';
-import { evaluateAlertDeduplication } from '../redis/deduplicator';
+import { evaluateAlertDeduplication, evaluateThresholdDeduplication } from '../redis/deduplicator';
 import { enqueueAlertDispatch } from '../queue';
 import { redis } from '../redis/client';
 import { pollMeteoAlarmAlerts, pollThresholdAlerts } from '../ingestion/poller';
 import { benchmarkH3VsPostgis } from '../engine/h3-matcher';
 import { fetchRollingForecast24h } from '../ingestion/providers/open-meteo';
-import { evaluateWeatherThresholds } from '../engine/threshold-evaluator';
+import { evaluateWeatherThresholds, type ConsolidatedThresholdAlert } from '../engine/threshold-evaluator';
 import type { UserThresholdPreferences } from '../db/schema';
 import { env } from '../config/env';
 
@@ -35,6 +35,9 @@ export function registerBotHandlers(bot: Bot) {
         '• /testh3match — Compare Inverted H3 vs PostGIS ST_Covers speed\n' +
         '• /testalert — Simulate a storm cell at your location\n' +
         '• /testescalate — Simulate a rapid escalation (Red Alert)\n' +
+        '• /testradar — Simulate an approaching radar cell\n' +
+        '• /testthreshold — Simulate a 24h threshold breach\n' +
+        '• /pollthresholds — Evaluate thresholds for all users\n' +
         '• /resetalerts — Clear the cooldown window in Redis\n' +
         '• /help — Full instructions',
       {
@@ -70,6 +73,9 @@ export function registerBotHandlers(bot: Bot) {
         '/testh3match — Benchmark H3 vs PostGIS speed\n' +
         '/testalert — Simulate a storm alert test\n' +
         '/testescalate — Simulate an escalation test (Red Alert)\n' +
+        '/testradar — Simulate an approaching radar cell\n' +
+        '/testthreshold — Simulate a 24h threshold breach\n' +
+        '/pollthresholds — Evaluate thresholds for all users\n' +
         '/resetalerts — Reset alert deduplication state',
       { parse_mode: 'HTML' }
     );
@@ -602,6 +608,26 @@ export function registerBotHandlers(bot: Bot) {
     await ctx.reply(`✅ <b>Hail risk mode updated to: ${label}!</b>`, { parse_mode: 'HTML' });
   });
 
+  async function safeEditMessage(ctx: any, text: string, keyboard?: InlineKeyboard) {
+    try {
+      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
+    } catch (err: any) {
+      const msg = err?.description || err?.message || '';
+      if (msg.includes('message is not modified')) {
+        return;
+      }
+      throw err;
+    }
+  }
+
+  async function safeAnswerCallback(ctx: any, text?: string) {
+    try {
+      await ctx.answerCallbackQuery(text ? { text } : undefined);
+    } catch {
+      // Query already answered or expired
+    }
+  }
+
   // Callback query dispatcher for inline keyboard clicks
   bot.on('callback_query:data', async (ctx) => {
     const data = ctx.callbackQuery.data;
@@ -618,16 +644,16 @@ export function registerBotHandlers(bot: Bot) {
     if (data === 'th:menu' || data === 'th:refresh') {
       const prefs = await getOrCreatePreferences(chatId);
       const { text, keyboard } = renderThresholdsMenu(prefs, locName);
-      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
-      return await ctx.answerCallbackQuery('Refreshed!');
+      await safeEditMessage(ctx, text, keyboard);
+      return await safeAnswerCallback(ctx, 'Refreshed!');
     }
 
     if (data.startsWith('th:select:')) {
       const metric = data.split(':')[2]!;
       const prefs = await getOrCreatePreferences(chatId);
       const { text, keyboard } = renderMetricSubmenu(metric, prefs);
-      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
-      return await ctx.answerCallbackQuery();
+      await safeEditMessage(ctx, text, keyboard);
+      return await safeAnswerCallback(ctx);
     }
 
     if (data.startsWith('th:toggle:')) {
@@ -648,8 +674,8 @@ export function registerBotHandlers(bot: Bot) {
 
       const updatedPrefs = await getOrCreatePreferences(chatId);
       const { text, keyboard } = renderMetricSubmenu(metric, updatedPrefs);
-      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
-      return await ctx.answerCallbackQuery('Setting toggled!');
+      await safeEditMessage(ctx, text, keyboard);
+      return await safeAnswerCallback(ctx, 'Setting toggled!');
     }
 
     if (data.startsWith('th:set:')) {
@@ -673,8 +699,8 @@ export function registerBotHandlers(bot: Bot) {
 
       const updatedPrefs = await getOrCreatePreferences(chatId);
       const { text, keyboard } = renderMetricSubmenu(metric, updatedPrefs);
-      await ctx.editMessageText(text, { parse_mode: 'HTML', reply_markup: keyboard });
-      return await ctx.answerCallbackQuery('Threshold updated!');
+      await safeEditMessage(ctx, text, keyboard);
+      return await safeAnswerCallback(ctx, 'Threshold updated!');
     }
 
     if (data === 'th:forecast') {
@@ -832,26 +858,177 @@ export function registerBotHandlers(bot: Bot) {
     }
   });
 
-  // 7. /resetalerts command (Clears Redis cooldown state so user can re-test from scratch)
+  // 6b. /testradar command (Simulates an approaching Doppler radar storm cell)
+  bot.command('testradar', async (ctx) => {
+    const chatId = ctx.chat.id;
+
+    const result = await db.execute(sql`
+      SELECT 
+        id,
+        telegram_chat_id AS "telegramChatId",
+        location_name AS "locationName",
+        h3_index AS "h3Index",
+        ST_X(location::geometry) AS lon,
+        ST_Y(location::geometry) AS lat
+      FROM user_alert_zones
+      WHERE telegram_chat_id = ${chatId}
+      LIMIT 1;
+    `);
+
+    const rows = result as any[];
+    if (rows.length === 0) {
+      return await ctx.reply('⚠️ Please register your location first using /start before triggering a test.');
+    }
+
+    const user = rows[0];
+    await ctx.reply('📡 <b>Simulating Doppler radar detection (approaching cell)...</b>', { parse_mode: 'HTML' });
+
+    const stormCellId = `RADAR_SIM_${Date.now().toString().slice(-4)}`;
+    const expiresAt = new Date(Date.now() + 35 * 60_000).toISOString();
+    const dedup = await evaluateAlertDeduplication(chatId, stormCellId, 1, undefined, expiresAt);
+
+    if (dedup.shouldSend) {
+      await enqueueAlertDispatch({
+        radar: {
+          stormCellId,
+          etaMinutes: 25,
+          speedKmh: 52,
+          headingDeg: 45,
+          maxDbz: 55,
+        },
+        user: {
+          id: user.id,
+          userId: user.id.toString(),
+          telegramChatId: chatId,
+          locationName: user.locationName,
+          h3Index: user.h3Index,
+          lat: Number(user.lat),
+          lon: Number(user.lon),
+        },
+        reason: 'RADAR_APPROACH',
+        dedupTimestamp: dedup.timestamp,
+      });
+    } else {
+      await ctx.reply(
+        `⏳ <b>Radar Alert Suppressed by Redis Deduplication</b>\n\n` +
+          `Use /resetalerts to clear active cooldowns.`,
+        { parse_mode: 'HTML' }
+      );
+    }
+  });
+
+  // 6c. /testthreshold command (Simulates a multi-hazard forecast threshold alert)
+  bot.command('testthreshold', async (ctx) => {
+    const chatId = ctx.chat.id;
+
+    const result = await db.execute(sql`
+      SELECT 
+        location_name AS "locationName",
+        h3_index AS "h3Index",
+        ST_X(location::geometry) AS lon,
+        ST_Y(location::geometry) AS lat
+      FROM user_alert_zones
+      WHERE telegram_chat_id = ${chatId}
+      LIMIT 1;
+    `);
+
+    const rows = result as any[];
+    if (rows.length === 0) {
+      return await ctx.reply('⚠️ Please register your location first using /start before triggering a test.');
+    }
+
+    const user = rows[0];
+    await ctx.reply('🌧️ <b>Simulating 24-hour forecast threshold breach...</b>', { parse_mode: 'HTML' });
+
+    const mockAlert: ConsolidatedThresholdAlert = {
+      chatId,
+      locationName: user.locationName,
+      lat: Number(user.lat),
+      lon: Number(user.lon),
+      windowStartTime: new Date().toISOString(),
+      windowEndTime: new Date(Date.now() + 24 * 3600 * 1000).toISOString(),
+      breaches: [
+        {
+          metric: 'RAIN',
+          symbol: '🌧️',
+          title: 'Heavy Rainfall',
+          configuredThreshold: 5.0,
+          forecastedValue: 18.4,
+          unit: 'mm',
+          recommendation: 'Check drainage, secure outdoor items, and expect localized surface water accumulation.',
+          severityRank: 2,
+        },
+        {
+          metric: 'WIND',
+          symbol: '💨',
+          title: 'Damaging Wind Gusts',
+          configuredThreshold: 60.0,
+          forecastedValue: 78.5,
+          unit: 'km/h',
+          recommendation: 'Fasten garden furniture, beware of falling branches, and exercise caution while driving.',
+          severityRank: 2,
+        },
+        {
+          metric: 'FROST',
+          symbol: '🥶',
+          title: 'Freezing / Frost Conditions',
+          configuredThreshold: 0.0,
+          forecastedValue: -2.1,
+          unit: '°C',
+          recommendation: 'Protect sensitive plants, insulate exposed pipes, and watch for black ice.',
+          severityRank: 1,
+        },
+      ],
+    };
+
+    const dedup = await evaluateThresholdDeduplication(chatId, mockAlert.breaches);
+    if (dedup.shouldSend) {
+      await enqueueAlertDispatch({
+        thresholdAlert: {
+          ...mockAlert,
+          breaches: dedup.approvedBreaches,
+        },
+        user: {
+          telegramChatId: chatId,
+          locationName: user.locationName,
+        },
+        reason: 'THRESHOLD_BREACH',
+      });
+    } else {
+      await ctx.reply(
+        `⏳ <b>Threshold Alert Suppressed by Redis Deduplication</b>\n\n` +
+          `Threshold alerts for today were already dispatched. Send /resetalerts to clear cooldowns.`,
+        { parse_mode: 'HTML' }
+      );
+    }
+  });
+
+  // 7. /resetalerts command (Clears Redis cooldown state across warnings, radar, and forecast thresholds)
   bot.command('resetalerts', async (ctx) => {
     const chatId = ctx.chat.id;
-    let cursor = '0';
-    const pattern = `alert:state:${chatId}:*`;
+    const patterns = [
+      `alert:state:${chatId}:*`,
+      `alert:threshold:${chatId}:*`,
+    ];
     let deletedCount = 0;
 
-    do {
-      const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
-      cursor = nextCursor;
-      if (keys.length > 0) {
-        await redis.del(...keys);
-        deletedCount += keys.length;
-      }
-    } while (cursor !== '0');
+    for (const pattern of patterns) {
+      let cursor = '0';
+      do {
+        const [nextCursor, keys] = await redis.scan(cursor, 'MATCH', pattern, 'COUNT', 100);
+        cursor = nextCursor;
+        if (keys.length > 0) {
+          await redis.del(...keys);
+          deletedCount += keys.length;
+        }
+      } while (cursor !== '0');
+    }
 
     if (deletedCount > 0) {
-      await ctx.reply(`🧹 <b>Redis alert state cleared!</b> (${deletedCount} active cooldown(s) reset).`, {
-        parse_mode: 'HTML',
-      });
+      await ctx.reply(
+        `🧹 <b>Redis alert state cleared!</b> (${deletedCount} active cooldown(s) reset across warnings, radar, and forecast thresholds).`,
+        { parse_mode: 'HTML' }
+      );
     } else {
       await ctx.reply(`ℹ️ No active cooldowns found for your account.`, {
         parse_mode: 'HTML',
