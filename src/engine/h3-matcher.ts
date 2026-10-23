@@ -1,6 +1,6 @@
 import { sql } from 'drizzle-orm';
 import * as h3 from 'h3-js';
-import { db } from '../db';
+import { db, queryClient } from '../db';
 import type { StormAlert, MatchedUser } from './types';
 import { matchStormToUsers } from './matcher';
 import { env } from '../config/env';
@@ -104,7 +104,9 @@ export async function matchStormUsingH3(alert: StormAlert): Promise<MatchedUser[
 
   const polygonJson = JSON.stringify(alert.polygonGeoJson);
 
-  const results = await db.execute(sql`
+  // postgres.js natively serializes a JS array as a Postgres array (text[]) when
+  // passed via the tagged-template literal, avoiding the 1664-entry ROW expression limit.
+  const results = await queryClient`
     SELECT 
       id,
       user_id AS "userId",
@@ -118,8 +120,8 @@ export async function matchStormUsingH3(alert: StormAlert): Promise<MatchedUser[
     AND ST_Covers(
       ST_SetSRID(ST_GeomFromGeoJSON(${polygonJson}), 4326),
       location::geometry
-    );
-  `);
+    )
+  `;
 
   const elapsedMs = (performance.now() - startTime).toFixed(2);
   const matchedUsers = results as unknown as MatchedUser[];
@@ -160,7 +162,9 @@ export async function benchmarkH3VsPostgis(alert: StormAlert): Promise<Benchmark
 
   if (impactedCells.length > 0) {
     const qStart = performance.now();
-    const results = await db.execute(sql`
+    // postgres.js natively serializes a JS array as a Postgres array (text[]) when
+    // passed via the tagged-template literal, avoiding the 1664-entry ROW expression limit.
+    const results = await queryClient`
       SELECT 
         id,
         user_id AS "userId",
@@ -174,8 +178,8 @@ export async function benchmarkH3VsPostgis(alert: StormAlert): Promise<Benchmark
       AND ST_Covers(
         ST_SetSRID(ST_GeomFromGeoJSON(${polygonJson}), 4326),
         location::geometry
-      );
-    `);
+      )
+    `;
     h3QueryMs = Number((performance.now() - qStart).toFixed(2));
     h3Results = results as unknown as MatchedUser[];
   }

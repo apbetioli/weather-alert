@@ -1,3 +1,7 @@
+import * as h3 from 'h3-js';
+import { env } from '../../config/env';
+import { redis as defaultRedis } from '../../redis/client';
+
 export interface OpenMeteoHourlyRaw {
   time: string[];
   precipitation: number[];
@@ -36,7 +40,16 @@ export interface RollingForecast24h {
 
 export interface FetchForecastOptions {
   timeoutMs?: number;
-  mockFallbackOnNetworkError?: boolean;
+  /** Redis client for result caching. When provided, responses are cached for `cacheTtlSeconds`. Defaults to project redis client. */
+  redis?: { get(key: string): Promise<string | null>; setex(key: string, ttl: number, value: string): Promise<any> };
+  /** TTL for cached forecasts in seconds. Defaults to 3600 (1 hour). */
+  cacheTtlSeconds?: number;
+  /** Explicit H3 cell index. If omitted, computed from lat/lon at configured resolution. */
+  h3Index?: string;
+  /**
+   * Explicit cache key override. When omitted, derived from H3 cell index (`openmeteo:forecast:h3:<cell>`).
+   */
+  cacheKey?: string;
 }
 
 /**
@@ -78,6 +91,9 @@ export function generateSyntheticForecast24h(lat: number, lon: number): RollingF
 /**
  * Fetches high-resolution hourly forecast from Open-Meteo for given coordinates
  * and extracts the rolling 24-hour window from the current hour.
+ *
+ * Supports Redis caching by Uber H3 hexagonal cell (Res 6) to avoid redundant requests
+ * for users in the same spatial cell.
  */
 export async function fetchRollingForecast24h(
   lat: number,
@@ -85,6 +101,25 @@ export async function fetchRollingForecast24h(
   options: FetchForecastOptions = {}
 ): Promise<RollingForecast24h> {
   const timeoutMs = options.timeoutMs || 8000;
+  const cacheTtlSeconds = options.cacheTtlSeconds ?? 3600;
+  const client = options.redis ?? defaultRedis;
+
+  // Use provided H3 index or compute it from coordinates at configured resolution
+  const h3Cell = options.h3Index || h3.latLngToCell(lat, lon, env.H3_RESOLUTION);
+  const cacheKey = options.cacheKey || `openmeteo:forecast:h3:${h3Cell}`;
+
+  // Try cache first
+  if (client) {
+    try {
+      const cached = await client.get(cacheKey);
+      if (cached) {
+        return JSON.parse(cached) as RollingForecast24h;
+      }
+    } catch {
+      // Cache miss or error — proceed to live fetch
+    }
+  }
+
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(
     4
   )}&hourly=precipitation,snowfall,wind_gusts_10m,temperature_2m,weather_code,cape&forecast_days=2&timezone=UTC`;
@@ -99,6 +134,13 @@ export async function fetchRollingForecast24h(
         'User-Agent': 'WeatherAlertApp/1.0 (European Open-Meteo Integration)',
       },
     });
+
+    if (response.status === 429) {
+      // Respect Retry-After header if present
+      const retryAfter = response.headers.get('Retry-After');
+      const waitSec = retryAfter ? parseInt(retryAfter, 10) : 60;
+      throw new Error(`Open-Meteo HTTP 429: Too Many Requests (retry after ${waitSec}s)`);
+    }
 
     if (!response.ok) {
       throw new Error(`Open-Meteo HTTP ${response.status}: ${response.statusText}`);
@@ -132,19 +174,26 @@ export async function fetchRollingForecast24h(
       });
     }
 
-    return {
+    const result: RollingForecast24h = {
       lat,
       lon,
       startTime: steps[0]?.time || nowIsoHour,
       endTime: steps[steps.length - 1]?.time || nowIsoHour,
       steps,
     };
+
+    // Persist to cache
+    if (client) {
+      try {
+        await client.setex(cacheKey, cacheTtlSeconds, JSON.stringify(result));
+      } catch {
+        // Non-fatal — live data is still returned
+      }
+    }
+
+    return result;
   } catch (err: any) {
     clearTimeout(timeoutId);
-    if (options.mockFallbackOnNetworkError) {
-      console.warn(`⚠️ [Open-Meteo] Network unreachable (${err?.message}). Using synthetic 24h fallback data.`);
-      return generateSyntheticForecast24h(lat, lon);
-    }
     throw err;
   }
 }

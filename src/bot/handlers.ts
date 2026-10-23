@@ -377,6 +377,7 @@ export function registerBotHandlers(bot: Bot) {
     const userResult = await db.execute(sql`
       SELECT 
         location_name AS "locationName",
+        h3_index AS "h3Index",
         ST_X(location::geometry) AS lon,
         ST_Y(location::geometry) AS lat
       FROM user_alert_zones
@@ -399,7 +400,9 @@ export function registerBotHandlers(bot: Bot) {
 
     try {
       const prefs = await getOrCreatePreferences(chatId);
-      const forecast = await fetchRollingForecast24h(lat, lon, { mockFallbackOnNetworkError: true });
+      const forecast = await fetchRollingForecast24h(lat, lon, {
+        h3Index: user.h3Index,
+      });
       const evalResult = evaluateWeatherThresholds(
         {
           telegramChatId: chatId,
@@ -684,25 +687,32 @@ export function registerBotHandlers(bot: Bot) {
       await ctx.answerCallbackQuery('Checking 24h forecast...');
       // Trigger forecast flow
       const userLoc = await db.execute(sql`
-        SELECT ST_X(location::geometry) AS lon, ST_Y(location::geometry) AS lat, location_name AS "locationName"
+        SELECT ST_X(location::geometry) AS lon, ST_Y(location::geometry) AS lat, location_name AS "locationName", h3_index AS "h3Index"
         FROM user_alert_zones WHERE telegram_chat_id = ${chatId} LIMIT 1;
       `);
       const row = (userLoc as any[])[0];
       if (!row) {
         return await ctx.reply('⚠️ Register a location first with /start.');
       }
-      const prefs = await getOrCreatePreferences(chatId);
-      const forecast = await fetchRollingForecast24h(Number(row.lat), Number(row.lon), { mockFallbackOnNetworkError: true });
-      const evalResult = evaluateWeatherThresholds(
-        { telegramChatId: chatId, locationName: row.locationName, lat: Number(row.lat), lon: Number(row.lon) },
-        prefs,
-        forecast
-      );
+      try {
+        const prefs = await getOrCreatePreferences(chatId);
+        const forecast = await fetchRollingForecast24h(Number(row.lat), Number(row.lon), {
+          h3Index: row.h3Index,
+        });
+        const evalResult = evaluateWeatherThresholds(
+          { telegramChatId: chatId, locationName: row.locationName, lat: Number(row.lat), lon: Number(row.lon) },
+          prefs,
+          forecast
+        );
 
-      if (evalResult && evalResult.breaches.length > 0) {
-        await ctx.reply(formatThresholdAlertHtml(evalResult), { parse_mode: 'HTML' });
-      } else {
-        await ctx.reply(`✅ <b>Forecast is clear for ${escapeHtml(row.locationName)}!</b> No thresholds breached in next 24 hours.`, { parse_mode: 'HTML' });
+        if (evalResult && evalResult.breaches.length > 0) {
+          await ctx.reply(formatThresholdAlertHtml(evalResult), { parse_mode: 'HTML' });
+        } else {
+          await ctx.reply(`✅ <b>Forecast is clear for ${escapeHtml(row.locationName)}!</b> No thresholds breached in next 24 hours.`, { parse_mode: 'HTML' });
+        }
+      } catch (err: any) {
+        console.error('Error fetching forecast in th:forecast callback:', err);
+        await ctx.reply(`⚠️ Unable to fetch live weather forecast: ${escapeHtml(err?.message || 'Network error')}. Please try again shortly.`, { parse_mode: 'HTML' });
       }
     }
   });
