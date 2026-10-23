@@ -139,21 +139,13 @@ export function registerBotHandlers(bot: Bot) {
 
     const result = await db.execute(sql`
       SELECT 
-        u.location_name AS "locationName",
-        u.h3_index AS "h3Index",
-        ST_X(u.location::geometry) AS lon,
-        ST_Y(u.location::geometry) AS lat,
-        u.updated_at AS "updatedAt",
-        p.rain_enabled AS "rainEnabled",
-        p.rain_threshold_mm AS "rainThresholdMm",
-        p.wind_enabled AS "windEnabled",
-        p.wind_threshold_kmh AS "windThresholdKmh",
-        p.frost_enabled AS "frostEnabled",
-        p.frost_threshold_c AS "frostThresholdC",
-        p.hail_mode AS "hailMode"
-      FROM user_alert_zones u
-      LEFT JOIN user_threshold_preferences p ON u.telegram_chat_id = p.telegram_chat_id
-      WHERE u.telegram_chat_id = ${chatId}
+        location_name AS "locationName",
+        h3_index AS "h3Index",
+        ST_X(location::geometry) AS lon,
+        ST_Y(location::geometry) AS lat,
+        updated_at AS "updatedAt"
+      FROM user_alert_zones
+      WHERE telegram_chat_id = ${chatId}
       LIMIT 1;
     `);
 
@@ -163,14 +155,16 @@ export function registerBotHandlers(bot: Bot) {
     }
 
     const row = rows[0];
+    const prefs = await getOrCreatePreferences(chatId);
+
     const escapedH3 = escapeHtml(row.h3Index);
     const escapedLat = escapeHtml(Number(row.lat).toFixed(4));
     const escapedLon = escapeHtml(Number(row.lon).toFixed(4));
 
-    const rainStatus = row.rainEnabled ? `${row.rainThresholdMm} mm` : 'Disabled';
-    const windStatus = row.windEnabled ? `${row.windThresholdKmh} km/h` : 'Disabled';
-    const frostStatus = row.frostEnabled ? `≤ ${row.frostThresholdC} °C` : 'Disabled';
-    const hailStatus = row.hailMode === 2 ? 'Severe Only' : row.hailMode === 1 ? 'Any Risk' : 'Disabled';
+    const rainStatus = prefs.rainEnabled ? `${prefs.rainThresholdMm} mm` : 'Disabled';
+    const windStatus = prefs.windEnabled ? `${prefs.windThresholdKmh} km/h` : 'Disabled';
+    const frostStatus = prefs.frostEnabled ? `≤ ${prefs.frostThresholdC} °C` : 'Disabled';
+    const hailStatus = prefs.hailMode === 2 ? 'Severe Only' : prefs.hailMode === 1 ? 'Any Risk' : 'Disabled';
 
     await ctx.reply(
       `📍 <b>Registered Alert Zone:</b>\n\n` +
@@ -226,7 +220,7 @@ export function registerBotHandlers(bot: Bot) {
     const result = await db.execute(sql`
       INSERT INTO user_threshold_preferences (telegram_chat_id)
       VALUES (${chatId})
-      ON CONFLICT (telegram_chat_id) DO UPDATE SET updated_at = NOW()
+      ON CONFLICT (telegram_chat_id) DO UPDATE SET updated_at = user_threshold_preferences.updated_at
       RETURNING 
         id,
         telegram_chat_id AS "telegramChatId",

@@ -22,6 +22,13 @@
       "when": 1792708800000,
       "tag": "0002_create_user_threshold_preferences",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792780000000,
+      "tag": "0003_backfill_user_threshold_preferences",
+      "breakpoints": true
     }
   ]
 }

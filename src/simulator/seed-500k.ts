@@ -82,6 +82,13 @@ async function seed500kUsers() {
       ON CONFLICT (telegram_chat_id) DO NOTHING;
     `;
 
+    await queryClient`
+      INSERT INTO user_threshold_preferences (telegram_chat_id)
+      SELECT c_id
+      FROM UNNEST(${chatIds}::bigint[]) AS t(c_id)
+      ON CONFLICT (telegram_chat_id) DO NOTHING;
+    `;
+
     inserted += batchCount;
     const batchMs = (performance.now() - t0).toFixed(0);
     const progress = ((inserted / TOTAL_USERS) * 100).toFixed(1);
