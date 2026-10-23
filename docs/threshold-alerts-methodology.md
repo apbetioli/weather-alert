@@ -204,6 +204,20 @@ To prevent repetitive alerts during every 3-hour check while a 24-hour storm sys
 * Set with an atomic TTL of 24 hours (`SET key 1 EX 86400 NX`).
 * Repeat checks within the same 24 hours are suppressed unless the metric experiences a major escalation ($+50\%$ accumulation increase or $+20\text{ km/h}$ wind surge).
 
+### Spatial H3 Forecast Caching (NWP Model Grid Alignment)
+
+Numerical weather prediction (NWP) models do not compute physical atmospheric simulations per meter; they operate on discrete horizontal grid meshes:
+* **DWD ICON-EU**: ~7 km native horizontal grid spacing
+* **ECMWF IFS**: ~9 km native horizontal grid spacing
+
+Because points within the same ~7 km area interpolate to virtually identical meteorological parameters in upstream NWP outputs, querying the API separately for every user coordinate within the same neighborhood wastes bandwidth, exhausts free API quotas, and risks `HTTP 429 Too Many Requests` blocks.
+
+To solve this, forecast retrieval uses **Uber H3 Resolution 6 hexagonal spatial caching**:
+* **Spatial Alignment:** An H3 Resolution 6 hexagon has an average area of **~36 km²** and measures **~7 km across** — matching European NWP model grid cells almost perfectly.
+* **Shared Spatial Cache:** Forecasts are stored in Redis under `openmeteo:forecast:h3:<h3Index>` with a 1-hour time-to-live (`TTL = 3600`).
+* **Co-Located Deduplication:** All users whose registered locations fall inside the same H3 hexagon share a single forecast response, collapsing $N$ redundant upstream API calls into 1.
+* **Rate-Limit Pacing:** During background sweeps, the poller identifies cold H3 cells and paces uncached API calls with a 200 ms inter-request delay (~5 req/s), while respecting upstream `Retry-After` response headers.
+
 ---
 
 ## 6. Telegram UX & Interaction Model

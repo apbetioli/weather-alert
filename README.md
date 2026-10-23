@@ -76,6 +76,7 @@ flowchart TD
   - 🥶 **Frost / Freeze** (°C minimum)
   - 🌡️ **Extreme Heat** (°C maximum)
   - 🧊 **Hail Risk** (WMO codes + CAPE & radar nowcasting)
+- **H3 Spatial Forecast Caching**: Caches forecasts by **Uber H3 Resolution 6 hexagon** (`openmeteo:forecast:h3:<cell>`, 1-hour TTL). Because Resolution 6 hexagons (~36 km² area, ~7 km across) align closely with NWP model grid resolutions (DWD ICON-EU at 7 km, ECMWF at 9 km), all users within the same cell share one cached forecast, eliminating redundant upstream requests and preventing rate-limit blocks (HTTP 429).
 - Bundles multiple simultaneous threshold breaches into consolidated cards with 24-hour Redis cooldown deduplication.
 - 📖 **Deep Dive:** See [Threshold Alerts Methodology](docs/threshold-alerts-methodology.md) for the complete visual step-by-step breakdown.
 

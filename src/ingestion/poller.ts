@@ -8,6 +8,9 @@ import { sql } from 'drizzle-orm';
 import { fetchRollingForecast24h } from './providers/open-meteo';
 import { evaluateWeatherThresholds } from '../engine/threshold-evaluator';
 import type { UserThresholdPreferences } from '../db/schema';
+import { redis } from '../redis/client';
+import * as h3 from 'h3-js';
+import { env } from '../config/env';
 
 export interface PollResult {
   totalAlerts: number;
@@ -177,12 +180,17 @@ async function runThresholdPoll(): Promise<ThresholdPollResult> {
   let dispatchedAlerts = 0;
   let suppressedAlerts = 0;
 
+  // Minimum delay between Open-Meteo API calls to stay within rate limits.
+  // Open-Meteo free tier allows ~10,000 requests/day — 200ms spacing gives ~5 req/s.
+  const INTER_REQUEST_DELAY_MS = 200;
+
   try {
     // 1. Query all registered users along with their threshold preferences
     const users = (await db.execute(sql`
       SELECT 
         u.telegram_chat_id AS "telegramChatId",
         u.location_name AS "locationName",
+        u.h3_index AS "h3Index",
         ST_X(u.location::geometry) AS lon,
         ST_Y(u.location::geometry) AS lat,
         p.rain_enabled AS "rainEnabled",
@@ -202,10 +210,16 @@ async function runThresholdPoll(): Promise<ThresholdPollResult> {
 
     totalEvaluated = users.length;
 
+    // Track which H3 hexagons have already been evaluated in this sweep
+    // so concurrent users in the same cell share one cached forecast.
+    const fetchedH3Cells = new Set<string>();
+
     for (const row of users) {
       const lat = Number(row.lat);
       const lon = Number(row.lon);
       if (isNaN(lat) || isNaN(lon)) continue;
+
+      const h3Index = (row.h3Index as string) || h3.latLngToCell(lat, lon, env.H3_RESOLUTION);
 
       const prefs: UserThresholdPreferences = {
         id: 0,
@@ -226,7 +240,21 @@ async function runThresholdPoll(): Promise<ThresholdPollResult> {
       };
 
       try {
-        const forecast = await fetchRollingForecast24h(lat, lon, { mockFallbackOnNetworkError: true });
+        // Throttle only when an uncached live fetch is needed
+        const isFirstInSweep = !fetchedH3Cells.has(h3Index);
+        if (isFirstInSweep) {
+          fetchedH3Cells.add(h3Index);
+          const cacheKey = `openmeteo:forecast:h3:${h3Index}`;
+          const isWarm = await redis.exists(cacheKey);
+          if (!isWarm && fetchedH3Cells.size > 1) {
+            await new Promise((resolve) => setTimeout(resolve, INTER_REQUEST_DELAY_MS));
+          }
+        }
+
+        const forecast = await fetchRollingForecast24h(lat, lon, {
+          h3Index,
+          redis,
+        });
         const evalResult = evaluateWeatherThresholds(
           {
             telegramChatId: row.telegramChatId,
@@ -263,8 +291,12 @@ async function runThresholdPoll(): Promise<ThresholdPollResult> {
         } else {
           suppressedAlerts++;
         }
-      } catch (err) {
-        console.warn(`⚠️ [Poller] Error evaluating forecast for chat ${row.telegramChatId}:`, err);
+      } catch (err: any) {
+        console.warn(`⚠️ [Poller] Error evaluating forecast for chat ${row.telegramChatId}:`, err?.message || err);
+        if (err?.message?.includes('429')) {
+          console.warn('🛑 [Poller] Open-Meteo rate limit (HTTP 429) hit. Halting remaining live fetches for this sweep.');
+          break;
+        }
       }
     }
   } catch (err) {
