@@ -18,8 +18,19 @@ export function createBot(): Bot | null {
     try {
       return await prev(method, payload, signal);
     } catch (err: any) {
+      // 1. Intercept "message is not modified" error when editing with identical content (e.g. clicking Refresh or active preset)
       if (
-        method === 'sendMessage' &&
+        (method === 'editMessageText' || method === 'editMessageReplyMarkup') &&
+        err?.error_code === 400 &&
+        typeof err?.description === 'string' &&
+        err.description.includes('message is not modified')
+      ) {
+        return true as any;
+      }
+
+      // 2. Intercept HTML parse error fallback
+      if (
+        (method === 'sendMessage' || method === 'editMessageText') &&
         err?.error_code === 400 &&
         typeof err?.description === 'string' &&
         err.description.includes("can't parse entities")
@@ -50,6 +61,10 @@ export function createBot(): Bot | null {
 
   // Catch bot errors gracefully
   bot.catch((err) => {
+    const desc = (err?.error as any)?.description || (err?.error as any)?.message || err?.message || '';
+    if (typeof desc === 'string' && desc.includes('message is not modified')) {
+      return;
+    }
     console.error(`❌ [Telegram Bot Error]:`, err);
   });
 
