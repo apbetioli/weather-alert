@@ -10,6 +10,7 @@
     "simulate": "bun run src/simulator/cli.ts",
     "test:dedup": "bun run src/simulator/test-deduplication.ts",
     "test:radar": "bun run src/simulator/test-radar.ts",
+    "test:thresholds": "bun run src/simulator/test-thresholds.ts",
     "benchmark": "bun run src/simulator/test-cap-ingestion.ts",
     "seed:users": "bun run src/simulator/seed-500k.ts"
   },

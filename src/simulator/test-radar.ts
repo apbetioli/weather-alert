@@ -79,7 +79,9 @@ async function testRadar() {
   }
 }
 
-testRadar().catch((err) => {
+testRadar().then(() => {
+  process.exit(0);
+}).catch((err) => {
   console.error('Radar simulation failed:', err);
-  process.exitCode = 1;
+  process.exit(1);
 });

@@ -1,4 +1,5 @@
 import { redis } from './client';
+import type { BreachedThreshold } from '../engine/threshold-evaluator';
 
 const DEDUP_LUA_SCRIPT = `
 local exists = redis.call('EXISTS', KEYS[1])
@@ -112,3 +113,48 @@ export async function releaseFailedAlertDispatch(
     return 0
   `, 1, key, timestamp.toString());
 }
+
+export interface ThresholdDedupResult {
+  shouldSend: boolean;
+  approvedBreaches: BreachedThreshold[];
+  suppressedCount: number;
+}
+
+/**
+ * Deduplicates threshold-based 24h weather forecast alerts using Redis.
+ * Ensures a user receives at most one notification per 24-hour window per metric
+ * unless the severity rank increases (escalation).
+ */
+export async function evaluateThresholdDeduplication(
+  chatId: number,
+  breaches: BreachedThreshold[],
+  customDateKey?: string
+): Promise<ThresholdDedupResult> {
+  const dateKey = customDateKey || new Date().toISOString().substring(0, 10);
+  const approved: BreachedThreshold[] = [];
+  let suppressed = 0;
+
+  for (const breach of breaches) {
+    const key = `alert:threshold:${chatId}:${breach.metric}:${dateKey}`;
+    const prevSeverity = await redis.get(key);
+
+    if (!prevSeverity) {
+      // Initial notification for this metric today -> Approve & set 24h TTL
+      await redis.set(key, breach.severityRank.toString(), 'EX', 86400);
+      approved.push(breach);
+    } else if (breach.severityRank > Number(prevSeverity)) {
+      // Escalation -> Approve & update stored rank
+      await redis.set(key, breach.severityRank.toString(), 'EX', 86400);
+      approved.push(breach);
+    } else {
+      suppressed++;
+    }
+  }
+
+  return {
+    shouldSend: approved.length > 0,
+    approvedBreaches: approved,
+    suppressedCount: suppressed,
+  };
+}
+

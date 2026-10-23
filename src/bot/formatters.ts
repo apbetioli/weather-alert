@@ -5,6 +5,7 @@ import {
 } from '../engine/types';
 import { env } from '../config/env';
 import type { RadarApproachNotice } from '../queue';
+import type { ConsolidatedThresholdAlert } from '../engine/threshold-evaluator';
 
 /**
  * Escapes reserved characters for Telegram HTML mode:
@@ -151,3 +152,66 @@ export function formatRadarApproachHtml(notice: RadarApproachNotice, user: Match
     `<i>The movement speed is how fast the radar echo is travelling across the ground — it is not a wind speed. This estimate is based on movement between radar scans. It is informational, not an official weather warning. For hazard severity and safety advice, follow MeteoAlarm and your national weather service.</i>`
   );
 }
+
+function formatShortTime(iso?: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return '';
+  const hours = String(d.getUTCHours()).padStart(2, '0');
+  const minutes = String(d.getUTCMinutes()).padStart(2, '0');
+  return `${hours}:${minutes} UTC`;
+}
+
+/**
+ * Formats a consolidated 24-hour threshold breach alert into a rich Telegram HTML message.
+ */
+export function formatThresholdAlertHtml(alert: ConsolidatedThresholdAlert): string {
+  const location = escapeHtml(alert.locationName);
+  const breaches = alert.breaches;
+
+  if (breaches.length === 1) {
+    const b = breaches[0]!;
+    const timingDetail = b.peakTime ? ` at ~${formatShortTime(b.peakTime)}` : '';
+    const startDetail = b.startTime ? `\n• ⏱️ <b>Expected Start:</b> ~${formatShortTime(b.startTime)}` : '';
+    const peakDetail = b.peakDetail ? `\n• 📊 <b>Intensity:</b> ${escapeHtml(b.peakDetail)}` : '';
+
+    return (
+      `${b.symbol} <b>Weather Threshold Alert: ${location}</b>\n\n` +
+      `<b>${location}</b> is forecasted to receive <b>${b.forecastedValue} ${b.unit}</b> of ${escapeHtml(
+        b.title.toLowerCase()
+      )} within the next 24 hours, exceeding your configured threshold of <b>${b.configuredThreshold} ${b.unit}</b>.\n` +
+      startDetail +
+      (b.peakTime ? `\n• ⏱️ <b>Peak Expected:</b> ~${formatShortTime(b.peakTime)}` : '') +
+      peakDetail +
+      `\n\n🛡️ <b>Recommendation:</b>\n` +
+      `${escapeHtml(b.recommendation)}\n\n` +
+      `<i>Forecast source: High-resolution European numerical prediction (Open-Meteo). Configurable via /thresholds.</i>`
+    );
+  }
+
+  // Multi-hazard consolidated card
+  const breachLines = breaches
+    .map((b) => {
+      const peak = b.peakTime ? ` (Peak ~${formatShortTime(b.peakTime)})` : '';
+      const detail = b.peakDetail ? ` — <i>${escapeHtml(b.peakDetail)}</i>` : '';
+      return (
+        `• ${b.symbol} <b>${escapeHtml(b.title)}:</b> Forecasted <b>${b.forecastedValue} ${b.unit}</b> ` +
+        `(Threshold: ${b.configuredThreshold} ${b.unit})${peak}${detail}`
+      );
+    })
+    .join('\n');
+
+  const recommendations = breaches
+    .map((b) => `• ${escapeHtml(b.recommendation)}`)
+    .join('\n');
+
+  return (
+    `⚠️ <b>Weather Threshold Alert: ${location}</b>\n\n` +
+    `<b>${breaches.length} configured thresholds</b> will be exceeded within the next 24 hours:\n\n` +
+    `${breachLines}\n\n` +
+    `🛡️ <b>Recommendations:</b>\n` +
+    `${recommendations}\n\n` +
+    `<i>Forecast source: High-resolution European numerical prediction (Open-Meteo). Configurable via /thresholds.</i>`
+  );
+}
+
