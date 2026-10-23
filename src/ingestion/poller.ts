@@ -1,8 +1,13 @@
 import { fetchMeteogateWarnings } from './providers/meteogate';
 import { mergeMeteoAlarmWarningAreas, normalizeMeteoAlarmAlert } from './normalizer';
 import { matchStormUsingH3 } from '../engine/h3-matcher';
-import { evaluateAlertDeduplication, releaseFailedAlertDispatch } from '../redis/deduplicator';
-import { enqueueAlertDispatchBatch, isSyntheticChat, type AlertJobInput } from '../queue';
+import { evaluateAlertDeduplication, evaluateThresholdDeduplication, releaseFailedAlertDispatch } from '../redis/deduplicator';
+import { enqueueAlertDispatchBatch, alertDispatchQueue, isSyntheticChat, type AlertJobInput } from '../queue';
+import { db } from '../db';
+import { sql } from 'drizzle-orm';
+import { fetchRollingForecast24h } from './providers/open-meteo';
+import { evaluateWeatherThresholds } from '../engine/threshold-evaluator';
+import type { UserThresholdPreferences } from '../db/schema';
 
 export interface PollResult {
   totalAlerts: number;
@@ -142,9 +147,148 @@ async function runMeteoAlarmPoll(): Promise<PollResult> {
   };
 }
 
+export interface ThresholdPollResult {
+  totalEvaluated: number;
+  usersWithBreaches: number;
+  dispatchedAlerts: number;
+  suppressedAlerts: number;
+}
+
+let activeThresholdPoll: Promise<ThresholdPollResult> | undefined;
+
+/**
+ * Sweeps all registered users, queries high-resolution 24h numerical forecasts from Open-Meteo,
+ * evaluates personal weather thresholds, and dispatches consolidated alerts with Redis deduplication.
+ */
+export function pollThresholdAlerts(): Promise<ThresholdPollResult> {
+  if (activeThresholdPoll) return activeThresholdPoll;
+  activeThresholdPoll = runThresholdPoll().finally(() => {
+    activeThresholdPoll = undefined;
+  });
+  return activeThresholdPoll;
+}
+
+async function runThresholdPoll(): Promise<ThresholdPollResult> {
+  const startTime = performance.now();
+  console.log('🔄 [Poller] Starting multi-hazard weather threshold evaluation sweep...');
+
+  let totalEvaluated = 0;
+  let usersWithBreaches = 0;
+  let dispatchedAlerts = 0;
+  let suppressedAlerts = 0;
+
+  try {
+    // 1. Query all registered users along with their threshold preferences
+    const users = (await db.execute(sql`
+      SELECT 
+        u.telegram_chat_id AS "telegramChatId",
+        u.location_name AS "locationName",
+        ST_X(u.location::geometry) AS lon,
+        ST_Y(u.location::geometry) AS lat,
+        p.rain_enabled AS "rainEnabled",
+        p.rain_threshold_mm AS "rainThresholdMm",
+        p.snow_enabled AS "snowEnabled",
+        p.snow_threshold_cm AS "snowThresholdCm",
+        p.wind_enabled AS "windEnabled",
+        p.wind_threshold_kmh AS "windThresholdKmh",
+        p.frost_enabled AS "frostEnabled",
+        p.frost_threshold_c AS "frostThresholdC",
+        p.heat_enabled AS "heatEnabled",
+        p.heat_threshold_c AS "heatThresholdC",
+        p.hail_mode AS "hailMode"
+      FROM user_alert_zones u
+      LEFT JOIN user_threshold_preferences p ON u.telegram_chat_id = p.telegram_chat_id;
+    `)) as any[];
+
+    totalEvaluated = users.length;
+
+    for (const row of users) {
+      const lat = Number(row.lat);
+      const lon = Number(row.lon);
+      if (isNaN(lat) || isNaN(lon)) continue;
+
+      const prefs: UserThresholdPreferences = {
+        id: 0,
+        telegramChatId: row.telegramChatId,
+        rainEnabled: row.rainEnabled ?? true,
+        rainThresholdMm: row.rainThresholdMm ?? '5.00',
+        snowEnabled: row.snowEnabled ?? true,
+        snowThresholdCm: row.snowThresholdCm ?? '2.00',
+        windEnabled: row.windEnabled ?? true,
+        windThresholdKmh: row.windThresholdKmh ?? '60.0',
+        frostEnabled: row.frostEnabled ?? true,
+        frostThresholdC: row.frostThresholdC ?? '0.0',
+        heatEnabled: row.heatEnabled ?? true,
+        heatThresholdC: row.heatThresholdC ?? '35.0',
+        hailMode: row.hailMode ?? 1,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      };
+
+      try {
+        const forecast = await fetchRollingForecast24h(lat, lon, { mockFallbackOnNetworkError: true });
+        const evalResult = evaluateWeatherThresholds(
+          {
+            telegramChatId: row.telegramChatId,
+            locationName: row.locationName,
+            lat,
+            lon,
+          },
+          prefs,
+          forecast
+        );
+
+        if (!evalResult || evalResult.breaches.length === 0) continue;
+
+        usersWithBreaches++;
+
+        // Deduplicate through Redis 24h gate
+        const dedup = await evaluateThresholdDeduplication(row.telegramChatId, evalResult.breaches);
+
+        if (dedup.shouldSend) {
+          dispatchedAlerts++;
+          const alertPayload = {
+            ...evalResult,
+            breaches: dedup.approvedBreaches,
+          };
+
+          await alertDispatchQueue.add('dispatch-threshold-alert', {
+            thresholdAlert: alertPayload,
+            user: {
+              telegramChatId: row.telegramChatId,
+              locationName: row.locationName,
+            },
+            reason: 'THRESHOLD_BREACH',
+          }, { priority: 2 });
+        } else {
+          suppressedAlerts++;
+        }
+      } catch (err) {
+        console.warn(`⚠️ [Poller] Error evaluating forecast for chat ${row.telegramChatId}:`, err);
+      }
+    }
+  } catch (err) {
+    console.error('❌ [Poller] Failed threshold poll sweep:', err);
+  }
+
+  const elapsed = (performance.now() - startTime).toFixed(1);
+  console.log(
+    `✨ [Poller] Threshold sweep finished in ${elapsed}ms: ` +
+      `${totalEvaluated} evaluated, ${usersWithBreaches} breached, ${dispatchedAlerts} dispatched, ${suppressedAlerts} suppressed.`
+  );
+
+  return {
+    totalEvaluated,
+    usersWithBreaches,
+    dispatchedAlerts,
+    suppressedAlerts,
+  };
+}
+
 export interface BackgroundPollerHandles {
   warningTimer: NodeJS.Timeout;
   radarTimer: NodeJS.Timeout;
+  thresholdTimer: NodeJS.Timeout;
   stop: () => void;
 }
 
@@ -157,7 +301,9 @@ export function startBackgroundPoller(intervalMs: number = 10 * 60 * 1000): Back
     `⏰ [Poller] Background MeteoAlarm Poller scheduled every ${(intervalMs / 1000 / 60).toFixed(0)} minutes.`
   );
   const radarIntervalMs = 5 * 60 * 1000;
+  const thresholdIntervalMs = 3 * 60 * 60 * 1000; // Every 3 hours
   console.log('⏰ [Poller] Background radar tracking scheduled every 5 minutes.');
+  console.log('⏰ [Poller] Background weather threshold evaluations scheduled every 3 hours.');
 
   // Run initial poll sweep after a short delay (e.g. 5 seconds) to allow server startup
   const startupTimer = setTimeout(() => {
@@ -168,6 +314,9 @@ export function startBackgroundPoller(intervalMs: number = 10 * 60 * 1000): Back
       fetchLiveRadarCells().catch((err) => {
         console.error('❌ [Poller] Error in initial radar tracking scan:', err);
       });
+    });
+    pollThresholdAlerts().catch((err) => {
+      console.error('❌ [Poller] Error in initial threshold evaluation:', err);
     });
   }, 5000);
 
@@ -185,13 +334,21 @@ export function startBackgroundPoller(intervalMs: number = 10 * 60 * 1000): Back
     });
   }, radarIntervalMs);
 
+  const thresholdTimer = setInterval(() => {
+    pollThresholdAlerts().catch((err) => {
+      console.error('❌ [Poller] Error in scheduled threshold evaluation:', err);
+    });
+  }, thresholdIntervalMs);
+
   return {
     warningTimer,
     radarTimer,
+    thresholdTimer,
     stop: () => {
       clearTimeout(startupTimer);
       clearInterval(warningTimer);
       clearInterval(radarTimer);
+      clearInterval(thresholdTimer);
     },
   };
 }

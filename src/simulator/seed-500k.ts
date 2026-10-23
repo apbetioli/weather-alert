@@ -50,9 +50,11 @@ async function seed500kUsers() {
       }
 
       // Round to 5 decimal places (~1 meter precision)
-      lats[i] = Math.round(lat * 100000) / 100000;
-      lons[i] = Math.round(lon * 100000) / 100000;
-      h3Indexes[i] = h3.latLngToCell(lats[i], lons[i], env.H3_RESOLUTION);
+      const roundedLat = Math.round(lat * 100000) / 100000;
+      const roundedLon = Math.round(lon * 100000) / 100000;
+      lats[i] = roundedLat;
+      lons[i] = roundedLon;
+      h3Indexes[i] = h3.latLngToCell(roundedLat, roundedLon, env.H3_RESOLUTION);
     }
 
     const t0 = performance.now();

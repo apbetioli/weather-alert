@@ -2,8 +2,9 @@ import { Worker } from 'bullmq';
 import { Bot, GrammyError } from 'grammy';
 import { redis } from '../redis/client';
 import { ALERT_DISPATCH_QUEUE_NAME, isSyntheticChat, type AlertJobData } from './index';
-import { formatAlertHtml, formatRadarApproachHtml } from '../bot/formatters';
+import { formatAlertHtml, formatRadarApproachHtml, formatThresholdAlertHtml } from '../bot/formatters';
 import { releaseFailedAlertDispatch } from '../redis/deduplicator';
+import type { MatchedUser } from '../engine/types';
 
 export function startDispatchWorker(bot: Bot): Worker<AlertJobData> {
   const worker = new Worker<AlertJobData>(
@@ -22,8 +23,10 @@ export function startDispatchWorker(bot: Bot): Worker<AlertJobData> {
 
       try {
         const message = 'radar' in job.data
-          ? formatRadarApproachHtml(job.data.radar, user)
-          : formatAlertHtml(job.data.alert, user, reason);
+          ? formatRadarApproachHtml(job.data.radar, user as MatchedUser)
+          : 'thresholdAlert' in job.data
+          ? formatThresholdAlertHtml(job.data.thresholdAlert)
+          : formatAlertHtml(job.data.alert, user as MatchedUser, reason);
         await bot.api.sendMessage(user.telegramChatId, message, {
           parse_mode: 'HTML',
         });
@@ -58,7 +61,11 @@ export function startDispatchWorker(bot: Bot): Worker<AlertJobData> {
   worker.on('failed', (job, err) => {
     console.error(`⚠️ [Queue Worker] Job ${job?.id} failed after ${job?.attemptsMade} attempt(s):`, err.message);
     if (job && job.attemptsMade >= (job.opts.attempts ?? 1) && job.data.dedupTimestamp !== undefined) {
-      const cellId = 'alert' in job.data ? job.data.alert.cellId : job.data.radar.stormCellId;
+      const cellId = 'alert' in job.data
+        ? job.data.alert.cellId
+        : 'radar' in job.data
+        ? job.data.radar.stormCellId
+        : 'threshold';
       releaseFailedAlertDispatch(
         job.data.user.telegramChatId,
         cellId,

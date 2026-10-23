@@ -15,6 +15,13 @@
       "when": 1791237578502,
       "tag": "0001_create_table_meteo_alarm_zones",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792708800000,
+      "tag": "0002_create_user_threshold_preferences",
+      "breakpoints": true
     }
   ]
 }

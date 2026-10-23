@@ -1,6 +1,7 @@
 import { Queue } from 'bullmq';
 import { redis } from '../redis/client';
 import type { StormAlert, MatchedUser } from '../engine/types';
+import type { ConsolidatedThresholdAlert } from '../engine/threshold-evaluator';
 
 export interface WarningJobData {
   alert: Omit<StormAlert, 'polygonGeoJson'>;
@@ -24,9 +25,19 @@ export interface RadarApproachJobData {
   dedupTimestamp?: number;
 }
 
-export type AlertJobData = WarningJobData | RadarApproachJobData;
+export interface ThresholdAlertJobData {
+  thresholdAlert: ConsolidatedThresholdAlert;
+  user: {
+    telegramChatId: number;
+    locationName: string;
+  };
+  reason: string;
+  dedupTimestamp?: number;
+}
+
+export type AlertJobData = WarningJobData | RadarApproachJobData | ThresholdAlertJobData;
 export type WarningJobInput = Omit<WarningJobData, 'alert'> & { alert: StormAlert };
-export type AlertJobInput = WarningJobInput | RadarApproachJobData;
+export type AlertJobInput = WarningJobInput | RadarApproachJobData | ThresholdAlertJobData;
 
 export function isSyntheticChat(user: { telegramChatId: number; locationName?: string }): boolean {
   return (
