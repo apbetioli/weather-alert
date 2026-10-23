@@ -38,6 +38,10 @@ async function runCliSimulation() {
       location = EXCLUDED.location,
       h3_index = EXCLUDED.h3_index,
       updated_at = NOW();
+
+    INSERT INTO user_threshold_preferences (telegram_chat_id)
+    VALUES (${testChatId})
+    ON CONFLICT (telegram_chat_id) DO NOTHING;
   `);
 
   console.log('✅ Test user location stored in PostGIS with GiST and H3 indexes.\n');
@@ -71,6 +75,7 @@ async function runCliSimulation() {
 
   console.log('\n🎉 ALL POSTGIS & H3 SPATIAL TESTS PASSED SUCCESSFULLY!');
   } finally {
+    await db.execute(sql`DELETE FROM user_threshold_preferences WHERE telegram_chat_id = ${testChatId}`);
     await db.execute(sql`DELETE FROM user_alert_zones WHERE telegram_chat_id = ${testChatId}`);
   }
 }

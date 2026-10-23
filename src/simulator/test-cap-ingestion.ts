@@ -76,6 +76,10 @@ async function runCapIngestionVerification() {
           location = EXCLUDED.location,
           h3_index = EXCLUDED.h3_index,
           updated_at = NOW();
+
+        INSERT INTO user_threshold_preferences (telegram_chat_id)
+        VALUES (${u.chatId})
+        ON CONFLICT (telegram_chat_id) DO NOTHING;
       `);
     }
     console.log(`✅ Seeded ${testUsers.length} test zones with PostGIS GiST and H3 B-Tree indexes.\n`);
@@ -116,6 +120,9 @@ async function runCapIngestionVerification() {
     );
   } finally {
     // Clean up temporary benchmark test zones
+    await db.execute(
+      sql`DELETE FROM user_threshold_preferences WHERE telegram_chat_id IN (900000001, 900000002);`
+    );
     await db.execute(
       sql`DELETE FROM user_alert_zones WHERE telegram_chat_id IN (900000001, 900000002);`
     );

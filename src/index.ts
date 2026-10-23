@@ -27,6 +27,17 @@ async function main() {
 
   await refreshUserH3Indexes();
 
+  // Ensure default threshold preferences exist for all registered users
+  try {
+    await db.execute(sql`
+      INSERT INTO user_threshold_preferences (telegram_chat_id)
+      SELECT telegram_chat_id FROM user_alert_zones
+      ON CONFLICT (telegram_chat_id) DO NOTHING;
+    `);
+  } catch (err) {
+    console.warn('⚠️ Could not backfill threshold preferences on startup:', err);
+  }
+
   // 2. Verify Redis connection
   try {
     const pong = await redis.ping();

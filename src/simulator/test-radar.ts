@@ -17,7 +17,11 @@ async function testRadar() {
   await db.execute(sql`
     INSERT INTO user_alert_zones (user_id, telegram_chat_id, location_name, location, h3_index)
     VALUES (gen_random_uuid(), ${testChatId}, 'Radar Test User', ST_GeogFromText('SRID=4326;POINT(${sql.raw(String(testLon))} ${sql.raw(String(testLat))})'), ${testH3})
-    ON CONFLICT (telegram_chat_id) DO NOTHING
+    ON CONFLICT (telegram_chat_id) DO NOTHING;
+
+    INSERT INTO user_threshold_preferences (telegram_chat_id)
+    VALUES (${testChatId})
+    ON CONFLICT (telegram_chat_id) DO NOTHING;
   `);
 
   // 2. Define the simulated cells
@@ -74,6 +78,7 @@ async function testRadar() {
   }
 
   } finally {
+    await db.execute(sql`DELETE FROM user_threshold_preferences WHERE telegram_chat_id = ${testChatId}`);
     await db.execute(sql`DELETE FROM user_alert_zones WHERE telegram_chat_id = ${testChatId}`);
     await alertDispatchQueue.close();
   }
