@@ -2,7 +2,7 @@ import { fetchRollingForecast24h, generateSyntheticForecast24h, normalizeOpenMet
 import { evaluateWeatherThresholds, type BreachedThreshold } from '../engine/threshold-evaluator';
 import { formatThresholdAlertHtml, formatShortTime } from '../bot/formatters';
 import { evaluateThresholdDeduplication } from '../redis/deduplicator';
-import { getUserLocalTime } from '../ingestion/poller';
+import { getUserLocalTime, startBackgroundPoller } from '../ingestion/poller';
 import { redis } from '../redis/client';
 import type { UserThresholdPreferences } from '../db/schema';
 
@@ -169,6 +169,26 @@ async function runThresholdTestSuite() {
   }
 
   console.log('✅ PASS: 7:00 AM user local time filtering confirmed across timezones.');
+
+  // 6. Test Cron Scheduling Configuration and Top-of-the-Hour Alignment
+  const pollerHandles = startBackgroundPoller();
+  const nextThresholdRun = pollerHandles.thresholdJob.nextRun();
+  if (!nextThresholdRun) {
+    throw new Error('thresholdJob must have a calculated nextRun date!');
+  }
+  if (nextThresholdRun.getMinutes() !== 0 || nextThresholdRun.getSeconds() !== 0) {
+    throw new Error(`thresholdJob nextRun must be aligned to :00:00, got: ${nextThresholdRun.toISOString()}`);
+  }
+  const nextWarningRun = pollerHandles.warningJob.nextRun();
+  if (!nextWarningRun || nextWarningRun.getMinutes() % 10 !== 0) {
+    throw new Error(`warningJob nextRun must be aligned to 10-minute cadence, got: ${nextWarningRun?.toISOString()}`);
+  }
+  const nextRadarRun = pollerHandles.radarJob.nextRun();
+  if (!nextRadarRun || nextRadarRun.getMinutes() % 5 !== 0) {
+    throw new Error(`radarJob nextRun must be aligned to 5-minute cadence, got: ${nextRadarRun?.toISOString()}`);
+  }
+  pollerHandles.stop();
+  console.log('✅ PASS: Cron schedule confirmed: 0 * * * * for 7:00 AM briefings, */10 for warnings, */5 for radar.');
 
   // --- Step 2: Single-Hazard Threshold Breach & Exact Message Format ---
   console.log('\n🌧️ Step 2: Testing Single-Hazard Rainfall Threshold Evaluation...');
