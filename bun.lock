@@ -8,6 +8,7 @@
         "@bull-board/hono": "^9.10.2",
         "@hono/bun": "^1.0.0",
         "bullmq": "^6.3.11",
+        "croner": "^10.0.1",
         "drizzle-orm": "^0.45.3",
         "grammy": "^1.46.0",
         "h3-js": "^4.5.0",
@@ -132,6 +133,8 @@
     "cluster-key-slot": ["cluster-key-slot@1.1.1", "", {}, "sha512-rwHwUfXL40Chm1r08yrhU3qpUvdVlgkKNeyeGPOxnW8/SyVDvgRaed/Uz54AqWNaTCAThlj6QAs3TZcKI0xDEw=="],
 
     "cron-parser": ["cron-parser@5.10.1", "", { "dependencies": { "luxon": "^3.7.2" } }, "sha512-pKRrRagItwk9rGIStcUyMxFX34x56zoX3KDf9HJ4ttwkXIK1qxK63EvXvEDmlxI9AdPJ+Y7TEKRftRlW5eSS7A=="],
+
+    "croner": ["croner@10.0.1", "", {}, "sha512-ixNtAJndqh173VQ4KodSdJEI6nuioBWI0V1ITNKhZZsO0pEMoDxz539T4FTTbSZ/xIOSuDnzxLVRqBVSvPNE2g=="],
 
     "debug": ["debug@4.4.3", "", { "dependencies": { "ms": "^2.1.3" } }, "sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA=="],
 

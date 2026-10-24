@@ -30,6 +30,7 @@
     "@bull-board/hono": "^9.10.2",
     "@hono/bun": "^1.0.0",
     "bullmq": "^6.3.11",
+    "croner": "^10.0.1",
     "drizzle-orm": "^0.45.3",
     "grammy": "^1.46.0",
     "h3-js": "^4.5.0",

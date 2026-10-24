@@ -11,6 +11,7 @@ import type { UserThresholdPreferences } from '../db/schema';
 import { redis } from '../redis/client';
 import * as h3 from 'h3-js';
 import tzLookup from 'tz-lookup';
+import { Cron } from 'croner';
 import { env } from '../config/env';
 
 export interface PollResult {
@@ -405,24 +406,29 @@ async function runThresholdPoll(options: ThresholdPollOptions = {}): Promise<Thr
 }
 
 export interface BackgroundPollerHandles {
-  warningTimer: NodeJS.Timeout;
-  radarTimer: NodeJS.Timeout;
-  thresholdTimer: NodeJS.Timeout;
+  warningJob: Cron;
+  radarJob: Cron;
+  thresholdJob: Cron;
   stop: () => void;
 }
 
-/**
- * Starts the recurring authoritative warning polling service.
- * Default interval: 10 minutes (600,000 ms), aligned with MeteoAlarm publication cadence.
- */
-export function startBackgroundPoller(intervalMs: number = 10 * 60 * 1000): BackgroundPollerHandles {
-  console.log(
-    `⏰ [Poller] Background MeteoAlarm Poller scheduled every ${(intervalMs / 1000 / 60).toFixed(0)} minutes.`
-  );
-  const radarIntervalMs = 5 * 60 * 1000;
-  const thresholdIntervalMs = 15 * 60 * 1000; // Check every 15 minutes for timezones reaching 7:00 AM
-  console.log('⏰ [Poller] Background radar tracking scheduled every 5 minutes.');
-  console.log('⏰ [Poller] Background weather threshold evaluations scheduled every 15 minutes (dispatched at 7:00 AM user local time).');
+export interface BackgroundPollerOptions {
+  // Cron pattern for European CAP warnings poll. Default: every 10 minutes ("*\/10 * * * *")
+  warningPattern?: string;
+  // Cron pattern for live Doppler radar scans. Default: every 5 minutes ("*\/5 * * * *")
+  radarPattern?: string;
+  // Cron pattern for 24h predictive threshold evaluations. Default: top of every hour ("0 * * * *")
+  thresholdPattern?: string;
+}
+
+// Starts the authoritative weather polling and tracking jobs using cron schedules:
+// - MeteoAlarm European warnings: every 10 minutes ("*/10 * * * *")
+// - Doppler radar tracking: every 5 minutes ("*/5 * * * *")
+// - 24h predictive threshold evaluations: top of every hour ("0 * * * *", dispatches at 7:00 AM user local time)
+export function startBackgroundPoller(options?: BackgroundPollerOptions): BackgroundPollerHandles {
+  const warningPattern = options?.warningPattern || '*/10 * * * *';
+  const radarPattern = options?.radarPattern || '*/5 * * * *';
+  const thresholdPattern = options?.thresholdPattern || '0 * * * *';
 
   // Run initial poll sweep after a short delay (e.g. 5 seconds) to allow server startup
   const startupTimer = setTimeout(() => {
@@ -439,35 +445,50 @@ export function startBackgroundPoller(intervalMs: number = 10 * 60 * 1000): Back
     });
   }, 5000);
 
-  const warningTimer = setInterval(() => {
-    pollMeteoAlarmAlerts().catch((err) => {
-      console.error('❌ [Poller] Error in scheduled background poll:', err);
-    });
-  }, intervalMs);
+  const warningJob = new Cron(warningPattern, { protect: true }, async () => {
+    try {
+      await pollMeteoAlarmAlerts();
+    } catch (err) {
+      console.error('❌ [Poller] Error in scheduled MeteoAlarm poll:', err);
+    }
+  });
 
-  const radarTimer = setInterval(() => {
-    import('../radar').then(({ fetchLiveRadarCells }) => {
-      fetchLiveRadarCells().catch((err) => {
-        console.error('❌ [Poller] Error in scheduled radar tracking scan:', err);
-      });
-    });
-  }, radarIntervalMs);
+  const radarJob = new Cron(radarPattern, { protect: true }, async () => {
+    try {
+      const { fetchLiveRadarCells } = await import('../radar');
+      await fetchLiveRadarCells();
+    } catch (err) {
+      console.error('❌ [Poller] Error in scheduled radar tracking scan:', err);
+    }
+  });
 
-  const thresholdTimer = setInterval(() => {
-    pollThresholdAlerts().catch((err) => {
+  const thresholdJob = new Cron(thresholdPattern, { protect: true }, async () => {
+    try {
+      await pollThresholdAlerts();
+    } catch (err) {
       console.error('❌ [Poller] Error in scheduled threshold evaluation:', err);
-    });
-  }, thresholdIntervalMs);
+    }
+  });
+
+  console.log(
+    `⏰ [Poller] Background MeteoAlarm Poller scheduled with cron: "${warningPattern}" (next: ${warningJob.nextRun()?.toISOString() || 'none'}).`
+  );
+  console.log(
+    `⏰ [Poller] Background radar tracking scheduled with cron: "${radarPattern}" (next: ${radarJob.nextRun()?.toISOString() || 'none'}).`
+  );
+  console.log(
+    `⏰ [Poller] Background threshold evaluations scheduled with cron: "${thresholdPattern}" (dispatches at 7:00 AM user local time; next: ${thresholdJob.nextRun()?.toISOString() || 'none'}).`
+  );
 
   return {
-    warningTimer,
-    radarTimer,
-    thresholdTimer,
+    warningJob,
+    radarJob,
+    thresholdJob,
     stop: () => {
       clearTimeout(startupTimer);
-      clearInterval(warningTimer);
-      clearInterval(radarTimer);
-      clearInterval(thresholdTimer);
+      warningJob.stop();
+      radarJob.stop();
+      thresholdJob.stop();
     },
   };
 }
