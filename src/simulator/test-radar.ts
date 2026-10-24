@@ -18,7 +18,9 @@ async function testRadar() {
     INSERT INTO user_alert_zones (user_id, telegram_chat_id, location_name, location, h3_index)
     VALUES (gen_random_uuid(), ${testChatId}, 'Radar Test User', ST_GeogFromText('SRID=4326;POINT(${sql.raw(String(testLon))} ${sql.raw(String(testLat))})'), ${testH3})
     ON CONFLICT (telegram_chat_id) DO NOTHING;
+  `);
 
+  await db.execute(sql`
     INSERT INTO user_threshold_preferences (telegram_chat_id)
     VALUES (${testChatId})
     ON CONFLICT (telegram_chat_id) DO NOTHING;

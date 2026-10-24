@@ -21,6 +21,56 @@ export function startDispatchWorker(bot: Bot): Worker<AlertJobData> {
         `📬 [Queue Worker] Processing alert job ${job.id} for user ${user.telegramChatId} (${user.locationName}) [Reason: ${reason}]`
       );
 
+      // Guard: do not deliver alerts that are already in the past or expired
+      const now = Date.now();
+      if ('alert' in job.data) {
+        const alert = job.data.alert;
+        if (alert.expires) {
+          const expTime = new Date(alert.expires).getTime();
+          if (!isNaN(expTime) && expTime <= now) {
+            console.log(
+              `🛑 [Queue Worker] Dropping expired CAP alert for user ${user.telegramChatId} (${alert.event}, expired at ${alert.expires}).`
+            );
+            return;
+          }
+        }
+      } else if ('thresholdAlert' in job.data) {
+        const threshold = job.data.thresholdAlert;
+        // Verify threshold alert has not expired and has at least one active/future breach
+        const windowEnd = new Date(threshold.windowEndTime).getTime();
+        if (!isNaN(windowEnd) && windowEnd <= now) {
+          console.log(
+            `🛑 [Queue Worker] Dropping expired threshold alert for user ${user.telegramChatId} (Window ended ${threshold.windowEndTime}).`
+          );
+          return;
+        }
+
+        const activeBreaches = threshold.breaches.filter((b) => {
+          if (!b.peakTime) return true;
+          const peakMs = new Date(b.peakTime).getTime();
+          return isNaN(peakMs) || peakMs + 3600 * 1000 > now;
+        });
+
+        if (activeBreaches.length === 0) {
+          console.log(
+            `🛑 [Queue Worker] Dropping threshold alert for user ${user.telegramChatId}: all breach peak times are in the past.`
+          );
+          return;
+        }
+        threshold.breaches = activeBreaches;
+      } else if ('radar' in job.data) {
+        const radar = job.data.radar;
+        const jobAgeMs = now - (job.timestamp || now);
+        const etaMs = radar.etaMinutes * 60 * 1000;
+        // Drop radar notice if job waited in queue longer than ETA + 5 minutes grace
+        if (jobAgeMs > etaMs + 5 * 60 * 1000) {
+          console.log(
+            `🛑 [Queue Worker] Dropping stale radar notice for user ${user.telegramChatId} (ETA ${radar.etaMinutes}m has passed).`
+          );
+          return;
+        }
+      }
+
       try {
         const message = 'radar' in job.data
           ? formatRadarApproachHtml(job.data.radar, user as MatchedUser)

@@ -1,3 +1,4 @@
+import tzLookup from 'tz-lookup';
 import type { RollingForecast24h } from '../ingestion/providers/open-meteo';
 import type { UserThresholdPreferences } from '../db/schema';
 
@@ -22,6 +23,7 @@ export interface ConsolidatedThresholdAlert {
   locationName: string;
   lat: number;
   lon: number;
+  timezone?: string;
   windowStartTime: string;
   windowEndTime: string;
   breaches: BreachedThreshold[];
@@ -32,12 +34,25 @@ export interface ConsolidatedThresholdAlert {
  * and returns all active breaches bundled into a consolidated structure.
  */
 export function evaluateWeatherThresholds(
-  user: { telegramChatId: number; locationName: string; lat: number; lon: number },
+  user: { telegramChatId: number; locationName: string; lat: number; lon: number; timezone?: string },
   preferences: UserThresholdPreferences,
-  forecast: RollingForecast24h
+  forecast: RollingForecast24h,
+  referenceTime: Date | number = Date.now()
 ): ConsolidatedThresholdAlert | null {
   const steps = forecast.steps;
   if (!steps || steps.length === 0) return null;
+
+  const refTimeMs = typeof referenceTime === 'number' ? referenceTime : referenceTime.getTime();
+
+  // Guard: filter out steps whose hourly window has completely passed relative to referenceTime
+  const activeSteps = steps.filter((step) => {
+    const stepMs = new Date(step.time).getTime();
+    if (isNaN(stepMs)) return false;
+    // An hourly step [stepMs, stepMs + 1h) is in the past if stepMs + 1h <= refTimeMs
+    return stepMs + 3600 * 1000 > refTimeMs;
+  });
+
+  if (activeSteps.length === 0) return null;
 
   const breaches: BreachedThreshold[] = [];
 
@@ -49,7 +64,7 @@ export function evaluateWeatherThresholds(
     let peakRainTime = '';
     let firstRainTime = '';
 
-    for (const step of steps) {
+    for (const step of activeSteps) {
       totalRainMm += step.precipitationMm;
       if (step.precipitationMm > 0 && !firstRainTime) {
         firstRainTime = step.time;
@@ -87,7 +102,7 @@ export function evaluateWeatherThresholds(
     let peakSnowTime = '';
     let maxHourlySnow = 0;
 
-    for (const step of steps) {
+    for (const step of activeSteps) {
       totalSnowCm += step.snowfallCm;
       if (step.snowfallCm > maxHourlySnow) {
         maxHourlySnow = step.snowfallCm;
@@ -119,7 +134,7 @@ export function evaluateWeatherThresholds(
     let maxGustKmh = 0;
     let peakGustTime = '';
 
-    for (const step of steps) {
+    for (const step of activeSteps) {
       if (step.windGustKmh > maxGustKmh) {
         maxGustKmh = step.windGustKmh;
         peakGustTime = step.time;
@@ -150,7 +165,7 @@ export function evaluateWeatherThresholds(
     let minTempC = 999;
     let lowestTempTime = '';
 
-    for (const step of steps) {
+    for (const step of activeSteps) {
       if (step.temperatureC < minTempC) {
         minTempC = step.temperatureC;
         lowestTempTime = step.time;
@@ -181,7 +196,7 @@ export function evaluateWeatherThresholds(
     let maxTempC = -999;
     let peakHeatTime = '';
 
-    for (const step of steps) {
+    for (const step of activeSteps) {
       if (step.temperatureC > maxTempC) {
         maxTempC = step.temperatureC;
         peakHeatTime = step.time;
@@ -210,10 +225,10 @@ export function evaluateWeatherThresholds(
   if (preferences.hailMode > 0) {
     const severeHailCodes = [90, 99];
     const anyHailCodes = [89, 90, 96, 99];
-    let detectedHailStep: (typeof steps)[0] | undefined;
+    let detectedHailStep: (typeof activeSteps)[0] | undefined;
     let isSevere = false;
 
-    for (const step of steps) {
+    for (const step of activeSteps) {
       if (severeHailCodes.includes(step.weatherCode) || (step.capeJkg >= 1500 && [95, 96, 99].includes(step.weatherCode))) {
         detectedHailStep = step;
         isSevere = true;
@@ -243,15 +258,32 @@ export function evaluateWeatherThresholds(
     }
   }
 
-  if (breaches.length === 0) return null;
+  // Double-check: ensure every breach has a peak time that hasn't completely elapsed
+  const futureBreaches = breaches.filter((b) => {
+    if (!b.peakTime) return true;
+    const peakMs = new Date(b.peakTime).getTime();
+    return isNaN(peakMs) || peakMs + 3600 * 1000 > refTimeMs;
+  });
+
+  if (futureBreaches.length === 0) return null;
+
+  let resolvedTz = user.timezone;
+  if (!resolvedTz && typeof user.lat === 'number' && typeof user.lon === 'number' && !isNaN(user.lat) && !isNaN(user.lon)) {
+    try {
+      resolvedTz = tzLookup(user.lat, user.lon);
+    } catch {
+      // fallback
+    }
+  }
 
   return {
     chatId: user.telegramChatId,
     locationName: user.locationName,
     lat: user.lat,
     lon: user.lon,
-    windowStartTime: forecast.startTime,
-    windowEndTime: forecast.endTime,
-    breaches,
+    timezone: resolvedTz,
+    windowStartTime: activeSteps[0]?.time || forecast.startTime,
+    windowEndTime: activeSteps[activeSteps.length - 1]?.time || forecast.endTime,
+    breaches: futureBreaches,
   };
 }
