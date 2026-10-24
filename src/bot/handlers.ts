@@ -450,9 +450,9 @@ export function registerBotHandlers(bot: Bot) {
 
   // /pollthresholds command: On-demand sweep trigger
   bot.command('pollthresholds', async (ctx) => {
-    await ctx.reply('🔄 <b>Evaluating multi-hazard weather thresholds for all users...</b>', { parse_mode: 'HTML' });
+    await ctx.reply('🔄 <b>Evaluating multi-hazard weather thresholds for all users (on-demand sweep)...</b>', { parse_mode: 'HTML' });
     try {
-      const res = await pollThresholdAlerts();
+      const res = await pollThresholdAlerts({ forceAll: true });
       await ctx.reply(
         `📊 <b>Threshold Evaluation Complete:</b>\n\n` +
           `• <b>Total Users Evaluated:</b> ${res.totalEvaluated}\n` +

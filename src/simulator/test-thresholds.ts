@@ -2,6 +2,7 @@ import { fetchRollingForecast24h, generateSyntheticForecast24h, normalizeOpenMet
 import { evaluateWeatherThresholds, type BreachedThreshold } from '../engine/threshold-evaluator';
 import { formatThresholdAlertHtml, formatShortTime } from '../bot/formatters';
 import { evaluateThresholdDeduplication } from '../redis/deduplicator';
+import { getUserLocalTime } from '../ingestion/poller';
 import { redis } from '../redis/client';
 import type { UserThresholdPreferences } from '../db/schema';
 
@@ -150,6 +151,24 @@ async function runThresholdTestSuite() {
     throw new Error('evaluateWeatherThresholds must return null when all threshold events are in the past!');
   }
   console.log('✅ PASS: Past alert suppression confirmed: events that already occurred in the past are ignored.');
+
+  // 5. Test 7:00 AM user local time calculation across global timezones
+  const tRome7am = getUserLocalTime('Europe/Rome', new Date('2026-10-24T05:00:00Z')); // 05:00 UTC = 07:00 CEST
+  if (tRome7am.hour !== 7 || tRome7am.dateKey !== '2026-10-24') {
+    throw new Error(`getUserLocalTime failed for Europe/Rome 7am: expected hour 7, got ${tRome7am.hour}`);
+  }
+
+  const tRomeNight = getUserLocalTime('Europe/Rome', new Date('2026-10-24T19:47:00Z')); // 19:47 UTC = 21:47 CEST
+  if (tRomeNight.hour !== 21) {
+    throw new Error(`getUserLocalTime failed for Europe/Rome 21h: expected hour 21, got ${tRomeNight.hour}`);
+  }
+
+  const tLondon7am = getUserLocalTime('Europe/London', new Date('2026-10-24T06:00:00Z')); // 06:00 UTC = 07:00 BST
+  if (tLondon7am.hour !== 7 || tLondon7am.dateKey !== '2026-10-24') {
+    throw new Error(`getUserLocalTime failed for Europe/London 7am: expected hour 7, got ${tLondon7am.hour}`);
+  }
+
+  console.log('✅ PASS: 7:00 AM user local time filtering confirmed across timezones.');
 
   // --- Step 2: Single-Hazard Threshold Breach & Exact Message Format ---
   console.log('\n🌧️ Step 2: Testing Single-Hazard Rainfall Threshold Evaluation...');

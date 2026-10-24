@@ -10,6 +10,7 @@ import { evaluateWeatherThresholds } from '../engine/threshold-evaluator';
 import type { UserThresholdPreferences } from '../db/schema';
 import { redis } from '../redis/client';
 import * as h3 from 'h3-js';
+import tzLookup from 'tz-lookup';
 import { env } from '../config/env';
 
 export interface PollResult {
@@ -150,35 +151,83 @@ async function runMeteoAlarmPoll(): Promise<PollResult> {
   };
 }
 
+export interface ThresholdPollOptions {
+  /** If true, evaluates all registered users regardless of local hour (used for on-demand /pollthresholds and test suites). */
+  forceAll?: boolean;
+  /** Target local hour to notify users (default: 7 for 07:00 AM user time). */
+  targetHour?: number;
+  /** Custom reference time for time-shifted testing. */
+  referenceTime?: Date;
+}
+
 export interface ThresholdPollResult {
   totalEvaluated: number;
+  usersEligible: number;
   usersWithBreaches: number;
   dispatchedAlerts: number;
   suppressedAlerts: number;
+  skippedDueToTime: number;
+}
+
+export interface UserLocalTime {
+  hour: number;
+  dateKey: string;
+  timezone: string;
+}
+
+export function getUserLocalTime(timezone: string, now: Date = new Date()): UserLocalTime {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: 'numeric',
+    hourCycle: 'h23',
+  }).formatToParts(now);
+
+  const year = parts.find((p) => p.type === 'year')?.value || '1970';
+  const month = parts.find((p) => p.type === 'month')?.value || '01';
+  const day = parts.find((p) => p.type === 'day')?.value || '01';
+  const hour = Number(parts.find((p) => p.type === 'hour')?.value ?? -1);
+
+  return {
+    hour,
+    dateKey: `${year}-${month}-${day}`,
+    timezone,
+  };
 }
 
 let activeThresholdPoll: Promise<ThresholdPollResult> | undefined;
 
 /**
- * Sweeps all registered users, queries high-resolution 24h numerical forecasts from Open-Meteo,
- * evaluates personal weather thresholds, and dispatches consolidated alerts with Redis deduplication.
+ * Sweeps registered users and queries high-resolution 24h numerical forecasts from Open-Meteo.
+ * By default, evaluates users during their 7:00 AM local time window once per calendar day.
  */
-export function pollThresholdAlerts(): Promise<ThresholdPollResult> {
+export function pollThresholdAlerts(options?: ThresholdPollOptions): Promise<ThresholdPollResult> {
   if (activeThresholdPoll) return activeThresholdPoll;
-  activeThresholdPoll = runThresholdPoll().finally(() => {
+  activeThresholdPoll = runThresholdPoll(options).finally(() => {
     activeThresholdPoll = undefined;
   });
   return activeThresholdPoll;
 }
 
-async function runThresholdPoll(): Promise<ThresholdPollResult> {
+async function runThresholdPoll(options: ThresholdPollOptions = {}): Promise<ThresholdPollResult> {
   const startTime = performance.now();
-  console.log('🔄 [Poller] Starting multi-hazard weather threshold evaluation sweep...');
+  const forceAll = options.forceAll ?? false;
+  const targetHour = options.targetHour ?? 7;
+  const refTime = options.referenceTime ?? new Date();
+
+  console.log(
+    `🔄 [Poller] Starting multi-hazard weather threshold evaluation sweep ` +
+      (forceAll ? '(Force all users on-demand)' : `(Target: ${targetHour}:00 AM user local time)...`)
+  );
 
   let totalEvaluated = 0;
+  let usersEligible = 0;
   let usersWithBreaches = 0;
   let dispatchedAlerts = 0;
   let suppressedAlerts = 0;
+  let skippedDueToTime = 0;
 
   // Minimum delay between Open-Meteo API calls to stay within rate limits.
   // Open-Meteo free tier allows ~10,000 requests/day — 200ms spacing gives ~5 req/s.
@@ -218,6 +267,33 @@ async function runThresholdPoll(): Promise<ThresholdPollResult> {
       const lat = Number(row.lat);
       const lon = Number(row.lon);
       if (isNaN(lat) || isNaN(lon)) continue;
+
+      let userTz = 'UTC';
+      try {
+        userTz = tzLookup(lat, lon);
+      } catch {
+        // fallback to UTC
+      }
+
+      const { hour: localHour, dateKey: localDateKey } = getUserLocalTime(userTz, refTime);
+
+      // Unless forceAll is requested, only notify during the target local hour (default: 7 AM)
+      if (!forceAll) {
+        if (localHour !== targetHour) {
+          skippedDueToTime++;
+          continue;
+        }
+
+        // Check if user was already evaluated/briefed for today's target hour
+        const briefingKey = `alert:threshold:${row.telegramChatId}:briefing:${localDateKey}`;
+        const alreadyBriefed = await redis.get(briefingKey);
+        if (alreadyBriefed) {
+          skippedDueToTime++;
+          continue;
+        }
+      }
+
+      usersEligible++;
 
       const h3Index = (row.h3Index as string) || h3.latLngToCell(lat, lon, env.H3_RESOLUTION);
 
@@ -261,17 +337,25 @@ async function runThresholdPoll(): Promise<ThresholdPollResult> {
             locationName: row.locationName,
             lat,
             lon,
+            timezone: userTz,
           },
           prefs,
-          forecast
+          forecast,
+          refTime
         );
+
+        // Mark as evaluated for today's briefing so subsequent 15m intervals don't duplicate
+        if (!forceAll) {
+          const briefingKey = `alert:threshold:${row.telegramChatId}:briefing:${localDateKey}`;
+          await redis.set(briefingKey, '1', 'EX', 86400);
+        }
 
         if (!evalResult || evalResult.breaches.length === 0) continue;
 
         usersWithBreaches++;
 
-        // Deduplicate through Redis 24h gate
-        const dedup = await evaluateThresholdDeduplication(row.telegramChatId, evalResult.breaches);
+        // Deduplicate through Redis 24h gate using user's local date key
+        const dedup = await evaluateThresholdDeduplication(row.telegramChatId, evalResult.breaches, localDateKey);
 
         if (dedup.shouldSend) {
           dispatchedAlerts++;
@@ -306,14 +390,17 @@ async function runThresholdPoll(): Promise<ThresholdPollResult> {
   const elapsed = (performance.now() - startTime).toFixed(1);
   console.log(
     `✨ [Poller] Threshold sweep finished in ${elapsed}ms: ` +
-      `${totalEvaluated} evaluated, ${usersWithBreaches} breached, ${dispatchedAlerts} dispatched, ${suppressedAlerts} suppressed.`
+      `${totalEvaluated} total, ${usersEligible} eligible (7 AM local), ${usersWithBreaches} breached, ` +
+      `${dispatchedAlerts} dispatched, ${suppressedAlerts} suppressed, ${skippedDueToTime} skipped (outside 7 AM window or already briefed).`
   );
 
   return {
     totalEvaluated,
+    usersEligible,
     usersWithBreaches,
     dispatchedAlerts,
     suppressedAlerts,
+    skippedDueToTime,
   };
 }
 
@@ -333,9 +420,9 @@ export function startBackgroundPoller(intervalMs: number = 10 * 60 * 1000): Back
     `⏰ [Poller] Background MeteoAlarm Poller scheduled every ${(intervalMs / 1000 / 60).toFixed(0)} minutes.`
   );
   const radarIntervalMs = 5 * 60 * 1000;
-  const thresholdIntervalMs = 3 * 60 * 60 * 1000; // Every 3 hours
+  const thresholdIntervalMs = 15 * 60 * 1000; // Check every 15 minutes for timezones reaching 7:00 AM
   console.log('⏰ [Poller] Background radar tracking scheduled every 5 minutes.');
-  console.log('⏰ [Poller] Background weather threshold evaluations scheduled every 3 hours.');
+  console.log('⏰ [Poller] Background weather threshold evaluations scheduled every 15 minutes (dispatched at 7:00 AM user local time).');
 
   // Run initial poll sweep after a short delay (e.g. 5 seconds) to allow server startup
   const startupTimer = setTimeout(() => {
