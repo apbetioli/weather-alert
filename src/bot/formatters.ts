@@ -1,3 +1,4 @@
+import tzLookup from 'tz-lookup';
 import {
   type StormAlert,
   type MatchedUser,
@@ -37,13 +38,15 @@ function escapeHtmlWithinLimit(value: string | number, maxLength: number): strin
 }
 
 /**
- * Formats ISO timestamp unambiguously into European DD/MM/YYYY HH:mm format.
+ * Formats ISO timestamp into unambiguous European DD/MM/YYYY HH:mm format,
+ * showing local time with timezone code and UTC time when a local timezone is provided.
  */
-function formatDateTime(iso?: string): string {
+function formatDateTime(iso?: string, timeZone?: string): string {
   if (!iso) return 'N/A';
   const d = new Date(iso);
   if (isNaN(d.getTime())) return 'N/A';
-  const parts = new Intl.DateTimeFormat('en-GB', {
+
+  const utcParts = new Intl.DateTimeFormat('en-GB', {
     timeZone: 'UTC',
     day: '2-digit',
     month: '2-digit',
@@ -52,14 +55,38 @@ function formatDateTime(iso?: string): string {
     minute: '2-digit',
     hourCycle: 'h23',
   }).formatToParts(d);
-  const part = (type: string) => parts.find((p) => p.type === type)?.value || '';
-  return `${part('day')}/${part('month')}/${part('year')} ${part('hour')}:${part('minute')} UTC`;
+  const uPart = (type: string) => utcParts.find((p) => p.type === type)?.value || '';
+  const utcFormatted = `${uPart('day')}/${uPart('month')}/${uPart('year')} ${uPart('hour')}:${uPart('minute')} UTC`;
+
+  if (!timeZone || timeZone.toUpperCase() === 'UTC') {
+    return utcFormatted;
+  }
+
+  try {
+    const localParts = new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+      timeZoneName: 'short',
+    }).formatToParts(d);
+    const lPart = (type: string) => localParts.find((p) => p.type === type)?.value || '';
+    const tzName = localParts.find((p) => p.type === 'timeZoneName')?.value || timeZone;
+    const localFormatted = `${lPart('day')}/${lPart('month')}/${lPart('year')} ${lPart('hour')}:${lPart('minute')} ${tzName}`;
+
+    return `${localFormatted} (${uPart('hour')}:${uPart('minute')} UTC)`;
+  } catch {
+    return utcFormatted;
+  }
 }
 
-function formatDateWindow(onsetIso?: string, expiresIso?: string): string {
-  if (onsetIso && expiresIso) return `${formatDateTime(onsetIso)} → ${formatDateTime(expiresIso)}`;
-  if (onsetIso) return `from ${formatDateTime(onsetIso)}`;
-  if (expiresIso) return `until ${formatDateTime(expiresIso)}`;
+function formatDateWindow(onsetIso?: string, expiresIso?: string, timeZone?: string): string {
+  if (onsetIso && expiresIso) return `${formatDateTime(onsetIso, timeZone)} → ${formatDateTime(expiresIso, timeZone)}`;
+  if (onsetIso) return `from ${formatDateTime(onsetIso, timeZone)}`;
+  if (expiresIso) return `until ${formatDateTime(expiresIso, timeZone)}`;
   return 'N/A';
 }
 
@@ -72,6 +99,15 @@ export function formatAlertHtml(
   user: MatchedUser,
   reason?: string
 ): string {
+  let tz: string | undefined;
+  if (typeof user.lat === 'number' && typeof user.lon === 'number' && !isNaN(user.lat) && !isNaN(user.lon)) {
+    try {
+      tz = tzLookup(user.lat, user.lon);
+    } catch {
+      // fallback
+    }
+  }
+
   const escapedLocation = escapeHtmlWithinLimit(user.locationName, 400);
   const escapedH3 = escapeHtml(user.h3Index);
   const escapedInstruction = escapeHtmlWithinLimit(alert.instruction, 1300);
@@ -90,7 +126,7 @@ export function formatAlertHtml(
 
   const validitySection =
     alert.onset || alert.expires
-      ? `• <b>Validity Period:</b> <code>${formatDateWindow(alert.onset, alert.expires)}</code>\n`
+      ? `• <b>Validity Period:</b> <code>${formatDateWindow(alert.onset, alert.expires, tz)}</code>\n`
       : '';
 
   const metricsSection =
@@ -156,13 +192,44 @@ export function formatRadarApproachHtml(notice: RadarApproachNotice, user: Match
   );
 }
 
-function formatShortTime(iso?: string): string {
+/**
+ * Formats an ISO timestamp or Open-Meteo UTC time string into a short time string.
+ * When a user timeZone is provided (e.g. "Europe/Rome"), formats as:
+ * "20:00 CEST (18:00 UTC)"
+ * When no timezone or UTC is specified, formats as:
+ * "18:00 UTC"
+ */
+export function formatShortTime(iso?: string, timeZone?: string): string {
   if (!iso) return '';
-  const d = new Date(iso);
+  const normalized = iso.endsWith('Z') || /[+-]\d{2}(:\d{2})?$/.test(iso) ? iso : `${iso}Z`;
+  const d = new Date(normalized);
   if (isNaN(d.getTime())) return '';
-  const hours = String(d.getUTCHours()).padStart(2, '0');
-  const minutes = String(d.getUTCMinutes()).padStart(2, '0');
-  return `${hours}:${minutes} UTC`;
+
+  const utcHours = String(d.getUTCHours()).padStart(2, '0');
+  const utcMinutes = String(d.getUTCMinutes()).padStart(2, '0');
+  const utcString = `${utcHours}:${utcMinutes} UTC`;
+
+  if (!timeZone || timeZone.toUpperCase() === 'UTC') {
+    return utcString;
+  }
+
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone,
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+      timeZoneName: 'short',
+    }).formatToParts(d);
+
+    const hour = parts.find((p) => p.type === 'hour')?.value || utcHours;
+    const minute = parts.find((p) => p.type === 'minute')?.value || utcMinutes;
+    const tzName = parts.find((p) => p.type === 'timeZoneName')?.value || timeZone;
+
+    return `${hour}:${minute} ${tzName} (${utcString})`;
+  } catch {
+    return utcString;
+  }
 }
 
 /**
@@ -172,10 +239,19 @@ export function formatThresholdAlertHtml(alert: ConsolidatedThresholdAlert): str
   const location = escapeHtml(alert.locationName);
   const breaches = alert.breaches;
 
+  let tz = alert.timezone;
+  if (!tz && typeof alert.lat === 'number' && typeof alert.lon === 'number' && !isNaN(alert.lat) && !isNaN(alert.lon)) {
+    try {
+      tz = tzLookup(alert.lat, alert.lon);
+    } catch {
+      // fallback
+    }
+  }
+
   if (breaches.length === 1) {
     const b = breaches[0]!;
-    const timingDetail = b.peakTime ? ` at ~${formatShortTime(b.peakTime)}` : '';
-    const startDetail = b.startTime ? `\n• ⏱️ <b>Expected Start:</b> ~${formatShortTime(b.startTime)}` : '';
+    const timingDetail = b.peakTime ? ` at ~${formatShortTime(b.peakTime, tz)}` : '';
+    const startDetail = b.startTime ? `\n• ⏱️ <b>Expected Start:</b> ~${formatShortTime(b.startTime, tz)}` : '';
     const peakDetail = b.peakDetail ? `\n• 📊 <b>Intensity:</b> ${escapeHtml(b.peakDetail)}` : '';
 
     return (
@@ -184,7 +260,7 @@ export function formatThresholdAlertHtml(alert: ConsolidatedThresholdAlert): str
         b.title.toLowerCase()
       )} within the next 24 hours, exceeding your configured threshold of <b>${b.configuredThreshold} ${b.unit}</b>.\n` +
       startDetail +
-      (b.peakTime ? `\n• ⏱️ <b>Peak Expected:</b> ~${formatShortTime(b.peakTime)}` : '') +
+      (b.peakTime ? `\n• ⏱️ <b>Peak Expected:</b> ~${formatShortTime(b.peakTime, tz)}` : '') +
       peakDetail +
       `\n\n🛡️ <b>Recommendation:</b>\n` +
       `${escapeHtml(b.recommendation)}\n\n` +
@@ -195,7 +271,7 @@ export function formatThresholdAlertHtml(alert: ConsolidatedThresholdAlert): str
   // Multi-hazard consolidated card
   const breachLines = breaches
     .map((b) => {
-      const peak = b.peakTime ? ` (Peak ~${formatShortTime(b.peakTime)})` : '';
+      const peak = b.peakTime ? ` (Peak ~${formatShortTime(b.peakTime, tz)})` : '';
       const detail = b.peakDetail ? ` — <i>${escapeHtml(b.peakDetail)}</i>` : '';
       return (
         `• ${b.symbol} <b>${escapeHtml(b.title)}:</b> Forecasted <b>${b.forecastedValue} ${b.unit}</b> ` +

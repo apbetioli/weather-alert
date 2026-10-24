@@ -53,6 +53,18 @@ export interface FetchForecastOptions {
 }
 
 /**
+ * Normalizes Open-Meteo time strings (which are UTC but lack the 'Z' suffix, e.g. "2026-10-23T18:00")
+ * into standard ISO 8601 UTC strings ending with 'Z'.
+ */
+export function normalizeOpenMeteoUtcTime(rawTime?: string): string {
+  if (!rawTime) return '';
+  if (rawTime.endsWith('Z') || /[+-]\d{2}(:\d{2})?$/.test(rawTime)) {
+    return rawTime;
+  }
+  return `${rawTime}Z`;
+}
+
+/**
  * Generates synthetic 24h forecast data when running in strictly offline or sandbox testing environments.
  */
 export function generateSyntheticForecast24h(lat: number, lon: number): RollingForecast24h {
@@ -113,7 +125,27 @@ export async function fetchRollingForecast24h(
     try {
       const cached = await client.get(cacheKey);
       if (cached) {
-        return JSON.parse(cached) as RollingForecast24h;
+        const parsed = JSON.parse(cached) as RollingForecast24h;
+        const normalizedSteps = (parsed.steps || []).map((s) => ({
+          ...s,
+          time: normalizeOpenMeteoUtcTime(s.time),
+        }));
+        // Filter out steps whose hour has completely passed
+        const nowMs = Date.now();
+        const activeSteps = normalizedSteps.filter((s) => {
+          const stepMs = new Date(s.time).getTime();
+          return !isNaN(stepMs) && stepMs + 3600 * 1000 > nowMs;
+        });
+
+        // If the cache still has at least 12 active hours remaining, use it; otherwise proceed to live fetch
+        if (activeSteps.length >= 12) {
+          return {
+            ...parsed,
+            startTime: activeSteps[0]?.time || normalizeOpenMeteoUtcTime(parsed.startTime),
+            endTime: activeSteps[activeSteps.length - 1]?.time || normalizeOpenMeteoUtcTime(parsed.endTime),
+            steps: activeSteps,
+          };
+        }
       }
     } catch {
       // Cache miss or error — proceed to live fetch
@@ -153,9 +185,12 @@ export async function fetchRollingForecast24h(
       throw new Error('Open-Meteo returned invalid or empty hourly forecast series.');
     }
 
-    // Find the starting index corresponding to current UTC hour
-    const nowIsoHour = new Date().toISOString().substring(0, 13) + ':00';
-    let startIndex = data.hourly.time.findIndex((t) => t >= nowIsoHour);
+    // Find the starting index corresponding to the current active UTC hour
+    const nowMs = Date.now();
+    let startIndex = data.hourly.time.findIndex((t) => {
+      const stepMs = new Date(normalizeOpenMeteoUtcTime(t)).getTime();
+      return !isNaN(stepMs) && stepMs + 3600 * 1000 > nowMs;
+    });
     if (startIndex < 0) startIndex = 0;
 
     const sliceLength = Math.min(24, data.hourly.time.length - startIndex);
@@ -164,7 +199,7 @@ export async function fetchRollingForecast24h(
     for (let i = 0; i < sliceLength; i++) {
       const idx = startIndex + i;
       steps.push({
-        time: data.hourly.time[idx] || '',
+        time: normalizeOpenMeteoUtcTime(data.hourly.time[idx]),
         precipitationMm: Number(data.hourly.precipitation?.[idx] || 0),
         snowfallCm: Number(data.hourly.snowfall?.[idx] || 0),
         windGustKmh: Number(data.hourly.wind_gusts_10m?.[idx] || 0),
@@ -174,11 +209,12 @@ export async function fetchRollingForecast24h(
       });
     }
 
+    const fallbackIso = new Date().toISOString().substring(0, 13) + ':00Z';
     const result: RollingForecast24h = {
       lat,
       lon,
-      startTime: steps[0]?.time || nowIsoHour,
-      endTime: steps[steps.length - 1]?.time || nowIsoHour,
+      startTime: steps[0]?.time || fallbackIso,
+      endTime: steps[steps.length - 1]?.time || fallbackIso,
       steps,
     };
 
