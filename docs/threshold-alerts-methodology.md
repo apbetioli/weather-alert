@@ -196,11 +196,34 @@ The engine bundles all simultaneous breaches into a **single consolidated Telegr
 └─────────────────────────────────────────────────────────────┘
 ```
 
+### Scheduling, Timezones & Past Event Suppression
+
+#### 1. Daily 7:00 AM Local Morning Briefings via Wall-Clock Cron
+Unlike emergency alerts (civil defense CAP warnings and Doppler radar cells) which dispatch immediately 24/7, forecast threshold alerts represent a 24-hour daily planning preview. Dispatching non-emergency rain alerts in the middle of the night creates alert fatigue.
+* **Cron Pattern:** `0 * * * *` (Hourly, at `:00:00` sharp via `croner`).
+* **Timezone Resolution:** The user's exact IANA timezone (e.g. `Europe/Rome`, `Europe/London`, `Europe/Athens`) is derived dynamically from their registered WGS84 coordinates using `tz-lookup`.
+* **7:00 AM Filter:** When the hourly cron fires, it computes `getUserLocalTime(userTz, now)`. Only users whose local clock has struck **07:00** are evaluated for daily threshold briefings.
+* **Daily Briefing Key:** A Redis key `alert:threshold:<chatId>:briefing:<dateKey>` with a 24h TTL prevents duplicate sweeps for users within the same calendar day.
+* **On-Demand Sweeps:** Admins can trigger immediate sweeps for all users regardless of time using `/pollthresholds` (which passes `forceAll: true`).
+
+#### 2. Local Dual-Time Display & Timezone Immunity
+Open-Meteo returns hourly timestamps as `"YYYY-MM-DDTHH:mm"` without an explicit `'Z'` UTC suffix. In standard JavaScript `Date` parsing, omitting `'Z'` defaults to host local time, creating double-offset subtraction errors on servers.
+* `normalizeOpenMeteoUtcTime()` ensures every timestamp string is strictly normalized with a trailing `'Z'`.
+* Alerts display dual times formatted in the user's local timezone with UTC reference:
+  $$\text{Expected Start: } \sim\text{11:00 CEST (09:00 UTC)}$$
+
+#### 3. Past Event Suppression
+Users must never receive alerts for weather events that have already occurred:
+* **Active Horizon Filtering:** The threshold engine filters forecast intervals to only active/future steps ($t_{\text{step}} + 1\text{ hour} > t_{\text{ref}}$).
+* Past precipitation accumulation is discarded from the 24h sum; past peak times are ignored.
+* If all threshold breaches occurred in the past, `evaluateWeatherThresholds()` returns `null` and suppresses delivery.
+* **Queue Delivery Guard:** The BullMQ worker checks `step.expires` and `thresholdAlert.targetWindowEnd` before delivery to drop any delayed jobs that expired while waiting in the queue.
+
 ### Redis Atomic Deduplication Gate
-To prevent repetitive alerts during every 3-hour check while a 24-hour storm system remains active:
+To prevent repetitive alerts while a 24-hour storm system remains active:
 * Each metric breach computes an event signature:
   $$\text{Key} = \text{alert:threshold:}\langle \text{chatId} \rangle\text{:}\langle \text{metric} \rangle\text{:}\langle \text{dateKey} \rangle$$
-* Where $\text{dateKey} = \text{YYYY-MM-DD}$ representing the target 24-hour window.
+* Where $\text{dateKey} = \text{YYYY-MM-DD}$ representing the target 24-hour window in the user's local timezone.
 * Set with an atomic TTL of 24 hours (`SET key 1 EX 86400 NX`).
 * Repeat checks within the same 24 hours are suppressed unless the metric experiences a major escalation ($+50\%$ accumulation increase or $+20\text{ km/h}$ wind surge).
 
