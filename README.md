@@ -78,6 +78,9 @@ flowchart TD
   - 🧊 **Hail Risk** (WMO codes + CAPE & radar nowcasting)
 - **H3 Spatial Forecast Caching**: Caches forecasts by **Uber H3 Resolution 6 hexagon** (`openmeteo:forecast:h3:<cell>`, 1-hour TTL). Because Resolution 6 hexagons (~36 km² area, ~7 km across) align closely with NWP model grid resolutions (DWD ICON-EU at 7 km, ECMWF at 9 km), all users within the same cell share one cached forecast, eliminating redundant upstream requests and preventing rate-limit blocks (HTTP 429).
 - Bundles multiple simultaneous threshold breaches into consolidated cards with 24-hour Redis cooldown deduplication.
+- **7:00 AM Local Morning Briefings & Dual-Time Display**: Threshold forecasts are scheduled to notify users at **7:00 AM in their local timezone** (derived dynamically from their coordinates via `tz-lookup`). Alert messages clearly show local time with UTC reference (e.g., `~11:00 CEST (09:00 UTC)`).
+- **Past Event Suppression**: Automatically discards weather events that occurred prior to evaluation time so users never receive alerts for expired precipitation or past wind peaks.
+- **Wall-Clock Cron Scheduling**: Uses `croner` for drift-free background execution aligned to wall-clock boundaries (`0 * * * *`).
 - 📖 **Deep Dive:** See [Threshold Alerts Methodology](docs/threshold-alerts-methodology.md) for the complete visual step-by-step breakdown.
 
 ---
@@ -212,7 +215,7 @@ The app will:
 2. Verify Redis connection.
 3. Start the Bull Board monitoring dashboard on `http://localhost:3000/ui`.
 4. Start the Telegram Bot via long polling.
-5. Launch background pollers: MeteoGate warnings every 10 minutes, radar tracking every 5 minutes.
+5. Launch background cron pollers via `croner`: MeteoGate CAP warnings every 10 min (`*/10 * * * *`), live Doppler radar tracking every 5 min (`*/5 * * * *`), and 24h threshold morning briefings at top-of-hour (`0 * * * *`, evaluating users at 7:00 AM local time).
 
 > 💡 **Headless Mode:** If `TELEGRAM_BOT_TOKEN` is left empty, the app runs in headless mode. You can still run simulations and tests without Telegram.
 

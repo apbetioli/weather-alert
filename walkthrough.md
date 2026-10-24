@@ -55,7 +55,7 @@ flowchart TD
   * **Strict Polygon Matching:** Eliminated all hardcoded region fallbacks (e.g. `VENETO_FALLBACK_POLYGON`). If an alert lacks polygon geometry, coordinates remain empty (`[]`) and the alert is ignored by spatial matching rather than arbitrarily assigned to any region.
 * [poller.ts](file:///Users/alex/Code/alex/weather-alert/src/ingestion/poller.ts):
   * Exports `pollMeteoAlarmAlerts()` orchestrating the full pipeline (Fetch $\rightarrow$ Normalize $\rightarrow$ Inverted H3 Match $\rightarrow$ Redis Deduplicate $\rightarrow$ BullMQ Enqueue).
-  * Exports `startBackgroundPoller()` executing periodically every 10 minutes.
+  * Exports `startBackgroundPoller()` with unified wall-clock cron schedules via `croner`: MeteoAlarm CAP warnings every 10 min (`*/10 * * * *`), radar nowcasting every 5 min (`*/5 * * * *`), and threshold morning briefings top of every hour (`0 * * * *`, dispatching at 7:00 AM user local time).
   * Filters out expired warnings (`expires <= now`) and alerts without valid polygons before spatial matching.
 
 ### 3. Inverted H3 Spatial Matching Engine (`src/engine`)

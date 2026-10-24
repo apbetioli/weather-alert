@@ -16,6 +16,7 @@ This document serves as the authoritative, permanent record of the key engineeri
 | [**CHAL-06**](#chal-06-telegram-api-rate-limits--markup-resilience) | Telegram Rate Limits & Delivery Resilience | BullMQ, Worker, Bot | Burst dispatch latency vs. 429 API blocks & unescaped markup crashes | BullMQ 30 jobs/sec limiter + strict HTML entity transformer | ✅ Implemented |
 | [**CHAL-07**](#chal-07-user-trust-semantics--threshold-bundling) | Official Color Semantics & Alert Bundling | DB Schema, Evaluator, Bot | Sensationalized broadcasts vs. official civil protection color codes | Exact official color headers + consolidated multi-hazard cards | ✅ Implemented |
 | [**CHAL-08**](#chal-08-nwp-forecast-rate-limits--spatial-h3-caching) | NWP Forecast Rate Limits & Spatial Caching | Ingestion, Poller, Redis, H3 | Per-user HTTP requests vs. spatial forecast aggregation | Uber H3 Res 6 caching (~36 km²) matching NWP model grid (ICON/ECMWF) + 200ms sweep pacing | ✅ Implemented |
+| [**CHAL-09**](#chal-09-timezone-awareness-past-alert-suppression--wall-clock-cron-scheduling) | Timezone Awareness & Cron Scheduling | Ingestion, Poller, Evaluator, Bot | Arbitrary setInterval drift & UTC offset mismatch vs. exact 7 AM local briefings | Dynamic IANA `tz-lookup` + UTC 'Z' normalization + past event suppression + `croner` wall-clock schedule | ✅ Implemented |
 
 ---
 
@@ -390,6 +391,62 @@ Furthermore, issuing separate forecast requests for users located only a few hun
 - **API Request Elimination**: Collapsed redundant forecast calls by >90% in populated regions where multiple users share an H3 hexagon.
 - **Zero HTTP 429 Rate Limits**: Background poller sweeps run smoothly without triggering upstream rate limits or falling back to synthetic data.
 - **Sub-Millisecond User Response**: Interactive `/forecast` checks by Telegram users in previously evaluated cells return immediately from the warm Redis cache.
+
+---
+
+## CHAL-09: Timezone Awareness, Past Alert Suppression & Wall-Clock Cron Scheduling
+
+- **Status**: Implemented & Verified in Production
+- **Subsystems**: Ingestion, Poller, Threshold Engine, Telegram Formatter, BullMQ Queue
+- **Primary Files**:
+  - [`src/ingestion/providers/open-meteo.ts`](file:///Users/alex/Code/alex/weather-alert/src/ingestion/providers/open-meteo.ts)
+  - [`src/ingestion/poller.ts`](file:///Users/alex/Code/alex/weather-alert/src/ingestion/poller.ts)
+  - [`src/engine/threshold-evaluator.ts`](file:///Users/alex/Code/alex/weather-alert/src/engine/threshold-evaluator.ts)
+  - [`src/bot/formatters.ts`](file:///Users/alex/Code/alex/weather-alert/src/bot/formatters.ts)
+  - [`src/queue/worker.ts`](file:///Users/alex/Code/alex/weather-alert/src/queue/worker.ts)
+
+### 1. Context & The Core Problem
+During live testing of multi-hazard weather threshold alerts, three related time-series and scheduling issues emerged:
+1. **Timestamp Parsing & UTC Offset Shifts**: Open-Meteo returns hourly timestamps as ISO strings without a trailing `'Z'` (e.g. `"2026-10-24T18:00"`). In ECMAScript, date strings lacking `'Z'` are treated as host local time. When the bot formatted start and peak times (`getUTCHours()`), the server's local UTC offset was subtracted twice, causing reported start and peak times to be inaccurate.
+2. **Missing Local Timezone Semantics**: Alerts were displayed strictly in UTC. A user in Venice, Italy receiving a notice at `16:00 UTC` had to mentally compute daylight saving time (+2h in summer/CEST, +1h in winter/CET).
+3. **Past Event Alerts**: If a forecast was evaluated after rain had already fallen earlier that morning, the accumulation still breached thresholds, triggering confusing alerts for storms that were already over.
+4. **Interval Drift vs. 7:00 AM Morning Briefing**: Background threshold evaluations ran on `setInterval(..., 15 * 60 * 1000)`. Because intervals run relative to process startup, they drift and fire arbitrarily (e.g. 07:18, 07:33), rather than arriving predictably at **7:00 AM user local time**.
+
+### 2. Evaluated Alternatives & Trade-Off Matrix
+
+| Strategy | Advantages | Disadvantages | Verdict |
+|---|---|---|---|
+| **Option A: User manually configures UTC offset via /timezone** | User controls their preference. | High friction; requires manual user interaction; fails during Daylight Saving transitions. | ❌ Rejected |
+| **Option B: Parse with native Date without trailing 'Z'** | Zero transformations. | Host-dependent; breaks on multi-region cloud servers; introduces silent date-shift bugs. | ❌ Rejected |
+| **Option C: Coordinate-derived IANA timezone (`tz-lookup`) + UTC normalization + `croner` scheduling** | Zero user friction (auto-detected from GPS coordinates); daylight saving aware; drift-free wall-clock cron aligned to `:00:00`. | Adds lightweight `tz-lookup` and `croner` dependencies. | ✅ **Selected** |
+
+### 3. Decision & Technical Rationale
+
+1. **Strict UTC ISO String Normalization**:
+   - Implemented `normalizeOpenMeteoUtcTime()` in [`src/ingestion/providers/open-meteo.ts`](file:///Users/alex/Code/alex/weather-alert/src/ingestion/providers/open-meteo.ts). Every timestamp returned from Open-Meteo (or read from the Redis H3 cache) is guaranteed to end with `'Z'`.
+   - Updated [`src/bot/formatters.ts`](file:///Users/alex/Code/alex/weather-alert/src/bot/formatters.ts) to parse explicitly in UTC and format dual timestamps: `~20:00 CEST (18:00 UTC)`.
+
+2. **Coordinate-Based Timezone Resolution**:
+   - The user's exact IANA timezone string is derived directly from their registered WGS84 coordinates using `tz-lookup` (`tzLookup(lat, lon)`), eliminating any manual configuration.
+
+3. **Past Event Suppression & Active Horizon Filtering**:
+   - In [`src/engine/threshold-evaluator.ts`](file:///Users/alex/Code/alex/weather-alert/src/engine/threshold-evaluator.ts), steps are filtered to `activeSteps` ($t_{\text{step}} + 1\text{ hour} > t_{\text{ref}}$).
+   - Past rainfall is excluded from the 24h accumulation; past peak times are discarded; and alerts evaluate to `null` if no breaches remain in the active window.
+   - In [`src/queue/worker.ts`](file:///Users/alex/Code/alex/weather-alert/src/queue/worker.ts), safety delivery guards reject expired threshold alerts or outdated CAP warnings that spent too long waiting in the queue.
+
+4. **Wall-Clock Cron Scheduling (`croner`)**:
+   - Replaced all `setInterval` calls in [`src/ingestion/poller.ts`](file:///Users/alex/Code/alex/weather-alert/src/ingestion/poller.ts) with `croner` cron jobs:
+     - **Threshold Briefing Sweep**: `0 * * * *` (Top of every hour at `:00:00`). Checks `getUserLocalTime()` and evaluates users whose local clock has struck **07:00 AM**.
+     - **MeteoAlarm CAP Warnings**: `*/10 * * * *` (Every 10 minutes).
+     - **Doppler Radar Tracking**: `*/5 * * * *` (Every 5 minutes).
+   - All jobs run with `{ protect: true }` to eliminate concurrent execution if a sweep is delayed.
+   - Redis key `alert:threshold:${chatId}:briefing:${localDateKey}` (TTL 24h) prevents duplicate briefings for users on the same calendar day.
+
+### 4. Realized Outcomes & Verification
+- **Predictable Morning Delivery**: Users consistently receive their daily forecast threshold briefing at 07:00 AM local time, aligned to the top of the hour.
+- **Accurate Time Display**: Alert messages present intuitive dual times (e.g. `~11:00 CEST (09:00 UTC)`) with accurate start and peak forecasts.
+- **Zero Past Alert Noise**: Users never receive notifications for weather that has already occurred.
+- **Verified in Test Suite**: All assertions in `bun run test:thresholds` pass successfully across global timezones and cron schedules.
 
 ---
 
