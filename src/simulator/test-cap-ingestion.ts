@@ -76,7 +76,9 @@ async function runCapIngestionVerification() {
           location = EXCLUDED.location,
           h3_index = EXCLUDED.h3_index,
           updated_at = NOW();
+      `);
 
+      await db.execute(sql`
         INSERT INTO user_threshold_preferences (telegram_chat_id)
         VALUES (${u.chatId})
         ON CONFLICT (telegram_chat_id) DO NOTHING;
