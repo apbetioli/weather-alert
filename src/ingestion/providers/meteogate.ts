@@ -84,6 +84,61 @@ async function mapConcurrent<T, R>(
 }
 
 /**
+ * Robust fetch helper that handles empty responses, 204 No Content, malformed JSON,
+ * abort signals covering the entire transfer, and retries with backoff.
+ */
+async function fetchMeteogateJson<T>(
+  url: string | URL,
+  headers: Record<string, string>,
+  timeoutMs: number,
+  retries = 2
+): Promise<{ status: number; data: T | null }> {
+  let lastError: any;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(url, { signal: controller.signal, headers });
+
+      if (response.status === 204) {
+        return { status: 204, data: null };
+      }
+
+      const responseText = await response.text();
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} ${response.statusText}: ${responseText.slice(0, 500)}`);
+      }
+
+      if (!responseText || !responseText.trim()) {
+        return { status: response.status, data: null };
+      }
+
+      try {
+        const data = JSON.parse(responseText) as T;
+        return { status: response.status, data };
+      } catch (parseErr: any) {
+        throw new Error(
+          `Failed to parse JSON (HTTP ${response.status}, length ${responseText.length}): ${responseText.slice(0, 200)}`
+        );
+      }
+    } catch (err: any) {
+      lastError = err;
+      if (attempt < retries) {
+        const delay = 500 * Math.pow(2, attempt);
+        await new Promise((r) => setTimeout(r, delay));
+      }
+    } finally {
+      clearTimeout(timeoutId);
+    }
+  }
+
+  throw lastError;
+}
+
+/**
  * Fetches the exact GeoJSON boundary geometry for a feature, caching by OBJECTID.
  */
 async function fetchFeatureGeometry(
@@ -108,17 +163,15 @@ async function fetchFeatureGeometry(
 
   if (geomLink?.href) {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      const res = await fetch(geomLink.href, {
-        signal: controller.signal,
-        headers: { Accept: 'application/geo+json, application/json' },
-      });
-      clearTimeout(timeoutId);
+      const { data: geojson } = await fetchMeteogateJson<any>(
+        geomLink.href,
+        { Accept: 'application/geo+json, application/json' },
+        timeoutMs,
+        1
+      );
 
-      if (res.ok) {
-        const geojson = await res.json();
-        const geom = (geojson as any).geometry || geojson;
+      if (geojson) {
+        const geom = geojson.geometry || geojson;
         if (geom && (geom.type === 'Polygon' || geom.type === 'MultiPolygon') && geom.coordinates) {
           const result = {
             type: geom.type as 'Polygon' | 'MultiPolygon',
@@ -166,16 +219,14 @@ async function fetchAlertDetail(
 
   if (jsonLink?.href) {
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-      const res = await fetch(jsonLink.href, {
-        signal: controller.signal,
-        headers: { Accept: 'application/json' },
-      });
-      clearTimeout(timeoutId);
+      const { data: detail } = await fetchMeteogateJson<CapJsonDetail>(
+        jsonLink.href,
+        { Accept: 'application/json' },
+        timeoutMs,
+        1
+      );
 
-      if (res.ok) {
-        const detail = (await res.json()) as CapJsonDetail;
+      if (detail) {
         try {
           await redis.setex(cacheKey, 86400, JSON.stringify(detail)); // Cache for 24h
         } catch (err) {
@@ -252,22 +303,15 @@ export async function fetchMeteogateWarnings(
         url.searchParams.set('active', `${activeFromIso}/${futureIso}`);
         url.searchParams.set('page', String(page));
 
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
-        let response: Response;
-        try {
-          response = await fetch(url, { signal: controller.signal, headers });
-        } finally {
-          clearTimeout(timeoutId);
-        }
+        const { status, data: collection } = await fetchMeteogateJson<MeteoGateFeatureCollection>(
+          url,
+          headers,
+          timeoutMs,
+          2
+        );
 
-        if (response.status === 204) break;
-        if (!response.ok) {
-          const responseBody = (await response.text()).slice(0, 500);
-          throw new Error(`HTTP ${response.status} ${response.statusText}: ${responseBody}`);
-        }
+        if (status === 204 || !collection) break;
 
-        const collection = (await response.json()) as MeteoGateFeatureCollection;
         const pageFeatures = collection.features || [];
         pagesFetched++;
         rawFeatureCount += pageFeatures.length;

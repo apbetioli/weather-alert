@@ -25,35 +25,77 @@ async function runLiveRadarPoll(): Promise<StormCell[]> {
   const apiKey = env.METEOGATE_API_KEY;
   if (!apiKey) throw new Error('No API key provided for Radar API');
 
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 20000);
-
   let cells: StormCell[] = [];
   let scanTimestamp: number | undefined;
 
   try {
-    // 1. Fetch ODIM composite metadata from MeteoGate
-    const metaResponse = await fetch(
-      'https://api.meteogate.eu/eu-eumetnet-weather-radar/collections/observations/locations/0-20010-0-OPERA?parameter-name=DBZH:comp&level=0.0&format=ODIM',
-      {
-        headers: {
-          apikey: apiKey,
-          Accept: 'application/json',
-        },
-        signal: controller.signal,
-      }
-    );
+    // 1. Fetch ODIM composite metadata from MeteoGate with retry and safe JSON parsing
+    const metaUrl =
+      'https://api.meteogate.eu/eu-eumetnet-weather-radar/collections/observations/locations/0-20010-0-OPERA?parameter-name=DBZH:comp&level=0.0&format=ODIM';
+    let metaData: any = null;
+    const metaRetries = 2;
 
-    if (!metaResponse.ok) {
-      throw new Error(`Failed to fetch ODIM metadata: HTTP ${metaResponse.status}`);
+    for (let attempt = 0; attempt <= metaRetries; attempt++) {
+      const metaController = new AbortController();
+      const metaTimeoutId = setTimeout(() => metaController.abort(), 15000);
+
+      try {
+        const metaResponse = await fetch(metaUrl, {
+          headers: {
+            apikey: apiKey,
+            Accept: 'application/json',
+          },
+          signal: metaController.signal,
+        });
+
+        if (metaResponse.status === 204) {
+          console.log('ℹ️ [Radar Ingestion] ODIM metadata returned 204 No Content. No radar composite available.');
+          return [];
+        }
+
+        const metaText = await metaResponse.text();
+
+        if (!metaResponse.ok) {
+          throw new Error(
+            `Failed to fetch ODIM metadata: HTTP ${metaResponse.status} ${metaResponse.statusText}: ${metaText.slice(0, 300)}`
+          );
+        }
+
+        if (!metaText || !metaText.trim()) {
+          console.warn('⚠️ [Radar Ingestion] ODIM metadata returned empty response body.');
+          return [];
+        }
+
+        try {
+          metaData = JSON.parse(metaText);
+          break; // Successfully parsed metadata
+        } catch (jsonErr: any) {
+          throw new Error(
+            `Failed to parse ODIM metadata JSON (HTTP ${metaResponse.status}, length ${metaText.length}): ${metaText.slice(0, 200)}`
+          );
+        }
+      } catch (err: any) {
+        if (attempt < metaRetries) {
+          const delay = 1000 * Math.pow(2, attempt);
+          await new Promise((r) => setTimeout(r, delay));
+        } else {
+          throw err;
+        }
+      } finally {
+        clearTimeout(metaTimeoutId);
+      }
     }
 
-    const metaData = (await metaResponse.json()) as any;
+    if (!metaData) {
+      return [];
+    }
+
     const links = (metaData.links || []) as Array<{ href: string; rel?: string }>;
     const h5Links = links.filter((l) => l.href && l.href.endsWith('.h5'));
 
     if (h5Links.length === 0) {
-      throw new Error('No ODIM .h5 files found in MeteoGate response');
+      console.warn('⚠️ [Radar Ingestion] No ODIM .h5 files found in MeteoGate response.');
+      return [];
     }
 
     // Latest scan is the last item
@@ -64,14 +106,19 @@ async function runLiveRadarPoll(): Promise<StormCell[]> {
 
     console.log(`📡 [Radar Ingestion] Downloading latest ODIM scan: ${latestLink.href}`);
 
-    // 2. Fetch the .h5 binary file
-    const fileResponse = await fetch(latestLink.href, { signal: controller.signal });
-    if (!fileResponse.ok) {
-      throw new Error(`Failed to download ODIM .h5 file: HTTP ${fileResponse.status}`);
+    // 2. Fetch the .h5 binary file with dedicated timeout
+    const fileController = new AbortController();
+    const fileTimeoutId = setTimeout(() => fileController.abort(), 30000);
+    let arrayBuffer: ArrayBuffer;
+    try {
+      const fileResponse = await fetch(latestLink.href, { signal: fileController.signal });
+      if (!fileResponse.ok) {
+        throw new Error(`Failed to download ODIM .h5 file: HTTP ${fileResponse.status}`);
+      }
+      arrayBuffer = await fileResponse.arrayBuffer();
+    } finally {
+      clearTimeout(fileTimeoutId);
     }
-
-    const arrayBuffer = await fileResponse.arrayBuffer();
-    clearTimeout(timeoutId);
 
     // 3. Parse HDF5 container in-memory via jsfive
     const h5File = new hdf5.File(arrayBuffer, 'OPERA.h5');
@@ -199,7 +246,6 @@ async function runLiveRadarPoll(): Promise<StormCell[]> {
 
     console.log(`📥 [Radar Ingestion] Extracted ${cells.length} high-reflectivity echo clusters across Europe.`);
   } catch (err: any) {
-    clearTimeout(timeoutId);
     console.error(`❌ [Radar Ingestion] Live ODIM fetch failed: ${err.message}`);
     throw err;
   }

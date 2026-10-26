@@ -176,15 +176,34 @@ export interface UserLocalTime {
   timezone: string;
 }
 
+const dtfCache = new Map<string, Intl.DateTimeFormat>();
+
 export function getUserLocalTime(timezone: string, now: Date = new Date()): UserLocalTime {
-  const parts = new Intl.DateTimeFormat('en-CA', {
-    timeZone: timezone,
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: 'numeric',
-    hourCycle: 'h23',
-  }).formatToParts(now);
+  let dtf = dtfCache.get(timezone);
+  if (!dtf) {
+    try {
+      dtf = new Intl.DateTimeFormat('en-CA', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: 'numeric',
+        hourCycle: 'h23',
+      });
+      dtfCache.set(timezone, dtf);
+    } catch {
+      dtf = new Intl.DateTimeFormat('en-CA', {
+        timeZone: 'UTC',
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: 'numeric',
+        hourCycle: 'h23',
+      });
+    }
+  }
+
+  const parts = dtf.formatToParts(now);
 
   const year = parts.find((p) => p.type === 'year')?.value || '1970';
   const month = parts.find((p) => p.type === 'month')?.value || '01';
@@ -263,20 +282,42 @@ async function runThresholdPoll(options: ThresholdPollOptions = {}): Promise<Thr
     // Track which H3 hexagons have already been evaluated in this sweep
     // so concurrent users in the same cell share one cached forecast.
     const fetchedH3Cells = new Set<string>();
+    // Cache timezones by H3 hexagon index so 500k spatial polygon lookups
+    // complete in milliseconds instead of starving the event loop for 45+ seconds.
+    const tzCache = new Map<string, string>();
+    // Cache resolved local time per timezone for this sweep's fixed refTime.
+    const tzLocalTimeCache = new Map<string, UserLocalTime>();
+    let processedCount = 0;
 
     for (const row of users) {
+      // Periodically yield to event loop so background timers, scheduled polls,
+      // and radar tracking scans never experience TCP starvation.
+      if (++processedCount % 5000 === 0) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+
       const lat = Number(row.lat);
       const lon = Number(row.lon);
       if (isNaN(lat) || isNaN(lon)) continue;
 
-      let userTz = 'UTC';
-      try {
-        userTz = tzLookup(lat, lon);
-      } catch {
-        // fallback to UTC
+      const h3Index = (row.h3Index as string) || h3.latLngToCell(lat, lon, env.H3_RESOLUTION);
+
+      let userTz = tzCache.get(h3Index);
+      if (!userTz) {
+        try {
+          userTz = tzLookup(lat, lon);
+        } catch {
+          userTz = 'UTC';
+        }
+        tzCache.set(h3Index, userTz);
       }
 
-      const { hour: localHour, dateKey: localDateKey } = getUserLocalTime(userTz, refTime);
+      let localTime = tzLocalTimeCache.get(userTz);
+      if (!localTime) {
+        localTime = getUserLocalTime(userTz, refTime);
+        tzLocalTimeCache.set(userTz, localTime);
+      }
+      const { hour: localHour, dateKey: localDateKey } = localTime;
 
       // Unless forceAll is requested, only notify during the target local hour (default: 7 AM)
       if (!forceAll) {
@@ -295,8 +336,6 @@ async function runThresholdPoll(options: ThresholdPollOptions = {}): Promise<Thr
       }
 
       usersEligible++;
-
-      const h3Index = (row.h3Index as string) || h3.latLngToCell(lat, lon, env.H3_RESOLUTION);
 
       const prefs: UserThresholdPreferences = {
         id: 0,
