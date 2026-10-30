@@ -18,9 +18,7 @@
     "@types/bun": "latest",
     "@types/proj4": "^2.19.0",
     "@types/tz-lookup": "^6.1.2",
-    "drizzle-kit": "^0.31.11",
-    "jsfive": "^0.4.2",
-    "proj4": "^2.22.0"
+    "drizzle-kit": "^0.31.11"
   },
   "peerDependencies": {
     "typescript": "^5"
@@ -36,7 +34,9 @@
     "h3-js": "^4.5.0",
     "hono": "^4.13.13",
     "ioredis": "^6.0.0",
+    "jsfive": "^0.4.2",
     "postgres": "^3.4.9",
+    "proj4": "^2.22.0",
     "tz-lookup": "^6.1.25",
     "zod": "^4.6.5"
   }

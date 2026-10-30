@@ -1,0 +1,19 @@
+name: Deploy to Local Server
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    name: Auto Deploy
+    runs-on: self-hosted
+    steps:
+      - name: Deploy Weather Alert Containers
+        run: |
+          TARGET_DIR="${DEPLOY_PATH:-$HOME/weather-alert}"
+          if [ -d "$TARGET_DIR" ]; then
+            cd "$TARGET_DIR"
+          fi
+          ./scripts/deploy.sh
