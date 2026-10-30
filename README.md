@@ -197,17 +197,20 @@ HOST=0.0.0.0
 H3_RESOLUTION=6
 ```
 
-### 3. Start Infrastructure (PostGIS & Redis)
+### 3. Start Infrastructure
 
+**For local host development** (running the app directly with Bun):
 ```bash
-docker compose up -d
-```
-
-### 4. Run Migrations & Start Development Server
-
-```bash
+# Start PostGIS and Redis only
+docker compose up -d postgis redis
 bun run migrate
 bun run dev
+```
+
+**For complete containerized deployment** (PostGIS, Redis, and App all in Docker):
+```bash
+# Builds and starts all 3 containers; migrations run automatically
+docker compose up -d --build
 ```
 
 The app will:
@@ -236,6 +239,121 @@ The app will:
 | `HOST` | `0.0.0.0` | Binding host for Bull Board server |
 | `DASHBOARD_USERNAME`| `admin` | Optional HTTP Basic Auth username for `/ui` |
 | `DASHBOARD_PASSWORD`| `""` | Optional HTTP Basic Auth password (auth disabled if empty) |
+
+---
+
+## 🐳 Docker Production Setup & Auto-Deployment
+
+All three services (**PostGIS**, **Redis**, and the **Bun Application**) run in separate, isolated containers orchestrated by Docker Compose:
+
+| Container | Image | Port | Description |
+| :--- | :--- | :--- | :--- |
+| `weather-alert-postgis` | `postgis/postgis:16-3.4` | `5433:5432` | PostGIS spatial database with persistent storage |
+| `weather-alert-redis` | `redis:7-alpine` | `6380:6379` | In-memory deduplication gate & BullMQ queue |
+| `weather-alert-app` | Custom (`Dockerfile`) | `3000:3000` | Production Bun runner & Bull Board UI |
+
+When the `app` container starts, it automatically applies any pending Drizzle database migrations (`bun run src/db/migrate.ts`) before launching the service.
+
+### 1. Initial Server Setup
+
+SSH into your local server and run:
+
+```bash
+# 1. Clone your repository
+git clone git@github.com:apbetioli/weather-alert.git ~/weather-alert
+cd ~/weather-alert
+
+# 2. Configure environment variables
+cp .env.example .env
+nano .env
+
+# 3. Launch all containers
+docker compose up -d --build
+
+# 4. Check logs to verify health
+docker compose logs -f app
+```
+
+---
+
+### 2. Auto-Deploy on `git push` (GitHub Self-Hosted Runner)
+
+Because local home servers are typically behind a router/NAT without a static public IP or port forwarding, a **GitHub Self-Hosted Runner** is the ideal solution. It establishes an **outbound HTTPS connection** to GitHub, eliminating the need to expose any ports to the public internet.
+
+Whenever you push to the `main` branch, GitHub dispatches the job to your local server runner, which triggers [`scripts/deploy.sh`](scripts/deploy.sh) to pull changes, run migrations, and rebuild the containers with zero downtime.
+
+#### Step 1: Register the Runner in GitHub
+
+1. In your GitHub repository, navigate to **Settings** ➔ **Actions** ➔ **Runners**.
+2. Click **New self-hosted runner**.
+3. Select your server OS (e.g. **Linux**) and Architecture (e.g. **x64** or **ARM64**).
+
+#### Step 2: Install the Runner on Your Server
+
+SSH into your server and run the commands provided by GitHub:
+
+```bash
+# Create and enter the runner directory
+mkdir ~/actions-runner && cd ~/actions-runner
+
+# Download and extract the runner package (use the exact URL/version from GitHub UI)
+curl -o actions-runner-linux.tar.gz -L https://github.com/actions/runner/releases/download/...
+tar xzf ./actions-runner-linux.tar.gz
+
+# Configure the runner (use the token provided in the GitHub UI)
+./config.sh --url https://github.com/apbetioli/weather-alert --token <YOUR_RUNNER_REGISTRATION_TOKEN>
+```
+> Accept the default runner name and labels by pressing `<Enter>`.
+
+#### Step 3: Ensure Docker Permissions
+
+Ensure the server user running the runner can execute Docker commands without `sudo`:
+
+```bash
+sudo usermod -aG docker $USER
+newgrp docker
+```
+
+#### Step 4: Run the Runner as a System Service (Auto-Start on Boot)
+
+Install and start the runner as a background systemd service so it stays running after disconnects and reboots:
+
+```bash
+cd ~/actions-runner
+sudo ./svc.sh install
+sudo ./svc.sh start
+sudo ./svc.sh status
+```
+
+#### Step 5: Test the Workflow
+
+From your development machine, make any change, commit, and push:
+
+```bash
+git push origin main
+```
+
+- In GitHub, go to the **Actions** tab to watch the workflow run.
+- Your local server will execute `.github/workflows/deploy.yml` ➔ `scripts/deploy.sh`.
+- Docker pulls the latest code, applies new Drizzle migrations, rebuilds the container, and restarts the app automatically.
+
+---
+
+### 3. Useful Server Commands
+
+```bash
+# View live container logs
+docker compose logs -f app
+
+# Check container health and status
+docker compose ps
+
+# Manual redeploy at any time
+./scripts/deploy.sh
+
+# Stop all containers
+docker compose down
+```
 
 ---
 
